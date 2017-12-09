@@ -18,6 +18,22 @@
 char      inbuf[BUFFER_SIZE];
 char      outbuf[BUFFER_SIZE];  
 
+int commandid = 1;
+struct doom_dh_command
+{
+    int  id;
+    int  parentid;
+    char name[32];
+    int  waitinginput;
+    int  waitingresult;
+};
+
+struct doom_dh_command_list
+{
+    struct doom_dh_command command;
+    struct doom_dh_command_list *prev, *next;
+};
+
 struct doom_dh_node
 {
     int   id;	
@@ -26,9 +42,7 @@ struct doom_dh_node
     int   serverport;   
     int   nodeport;
     
-    char  command[32];
-    int   waitinginput;
-    int   waitingresult;
+    struct doom_dh_command_list *firstcommand,*lastcommand;
     char  buffer[BUFFER_SIZE*2];
 };
 struct    doom_dh_node*  pchildnodes[MAX_NODE_COUNT];
@@ -39,9 +53,7 @@ struct doom_dh_client
     char  ip[16];
     int   port;
     
-    char  command[32];
-    int   waitinginput;
-    int   waitingresult;
+    struct doom_dh_command_list *firstcommand,*lastcommand;
     char  buffer[BUFFER_SIZE*2];
 };
 struct    doom_dh_client*  pclients[MAX_CLIENT_COUNT];
@@ -64,6 +76,65 @@ char * back_skip_space(char* end)
     return end + 1;
 };
 
+
+void add_childcommand(struct doom_dh_node* pnode, struct doom_dh_command_list *pcommand)
+{
+    if(pnode->firstcommand == NULL)
+    {
+        pnode->firstcommand = pnode->lastcommand = pcommand;
+    }
+    else
+    {
+        pnode->lastcommand->next = pcommand;
+        pcommand->prev = pnode->lastcommand;
+        pnode->lastcommand = pcommand;
+    }
+}
+
+void add_command(struct doom_dh_client* pclient, struct doom_dh_command_list *pcommand)
+{
+    if(pclient->firstcommand == NULL)
+    {
+        pclient->firstcommand = pclient->lastcommand = pcommand;
+    }
+    else
+    {
+        pclient->lastcommand->next = pcommand;
+        pcommand->prev = pclient->lastcommand;
+        pclient->lastcommand = pcommand;
+    }
+}
+
+struct doom_dh_command_list *get_command(int commandid, struct doom_dh_client **ppcli)
+{
+    int i;
+    struct doom_dh_command_list* pcommand = NULL;
+    for(i = 0; i < MAX_CLIENT_COUNT; i++)
+    {
+        pcommand = pclients[i]->firstcommand;
+        while(pcommand != NULL)
+        {
+            if(pcommand->command.id == commandid)
+            {
+                *ppcli = pclients[i];
+                return pcommand;
+            }
+        }
+    }
+    *ppcli = NULL;
+    return NULL;
+}
+
+
+void dump_command_status(struct doom_dh_command_list *pcommand)
+{
+    while(pcommand != NULL)
+    {
+        printf("%d,%d,%s,%d,%d\n", pcommand->command.id, pcommand->command.parentid, pcommand->command.name, pcommand->command.waitinginput, pcommand->command.waitingresult);
+        pcommand = pcommand->next;
+    }
+}
+
 struct doom_dh_node* add_child_node(char* buffer, int server)
 {
     int j, ret;
@@ -71,9 +142,7 @@ struct doom_dh_node* add_child_node(char* buffer, int server)
     char *serverport, *nodeport;
     struct sockaddr_in nodeaddr;  
 
-    ip = buffer;
-    while(*ip == ' ') //skip ' '
-        ip++;
+    ip = skip_space(buffer);
 
     serverport = ip;
     while(*serverport != ' ') 
@@ -144,10 +213,9 @@ struct doom_dh_node* add_child_node(char* buffer, int server)
         pchildnodes[j]->nodeport      = atoi(nodeport);
         pchildnodes[j]->socket        = socket(AF_INET,SOCK_STREAM,0);
         pchildnodes[j]->id            = -1;
-        pchildnodes[j]->waitinginput  = 0;
-        pchildnodes[j]->waitingresult = 0;
+        pchildnodes[j]->firstcommand  = NULL;
+        pchildnodes[j]->lastcommand   = NULL;
         
-
         nodeaddr.sin_family =AF_INET;  
         nodeaddr.sin_port   = htons(pchildnodes[j]->serverport);
         nodeaddr.sin_addr.s_addr=inet_addr(ip);
@@ -166,7 +234,6 @@ struct doom_dh_node* add_child_node(char* buffer, int server)
             send(server,outbuf, strlen(outbuf), 0);
             return pchildnodes[j];
         }
-        
     }
     else
     {
@@ -182,6 +249,7 @@ void handle_node_response(int index)
     struct doom_dh_client* pcli = NULL;
  		int t;
     char *str, *start, *end;
+    struct doom_dh_command_list *pcommand;
 
     memset(inbuf, 0, BUFFER_SIZE);
     ret = recv(pchildnodes[index]->socket,inbuf,BUFFER_SIZE,0);
@@ -201,7 +269,7 @@ void handle_node_response(int index)
         printf("error recieve data, errno = %d\n", errno);
     }
     //ret > 0
-    if(	pchildnodes[index]->waitinginput <= 0 && //not waiting for input
+    if(	pchildnodes[index]->firstcommand == 0 && //not waiting for input or result
 	      strncasecmp(inbuf, "quit", strlen("quit")) == 0 )
 	  {
         close(pchildnodes[index]->socket);
@@ -210,17 +278,6 @@ void handle_node_response(int index)
         pchildnodes[index] = NULL;
     }
     strcat(pchildnodes[index]->buffer, inbuf);
-    
-    //get the client who is waiting for the result;
-    //LIMITATION: ONLY ONE client is waiting for result!!!!
-    for(i = 0; i < MAX_CLIENT_COUNT; i++)
-    {
-        if(pclients[i] != NULL && pclients[i]->waitingresult > 0)
-        {
-            pcli = pclients[i];
-            break;
-        }
-    }
     if(DEBUG)
     {
         printf("handle_node_response: pchildnodes[%d]->buffer = \n%s\n", index, pchildnodes[index]->buffer);
@@ -252,14 +309,58 @@ void handle_node_response(int index)
             printf("handle_node_response: start = %s\n", start);
         }
         
+     	  pcommand = get_command(pchildnodes[index]->firstcommand->command.parentid, &pcli);
+     	  assert(pcommand != NULL);
+
         if(strcasecmp(start, "/RES") ==  0)
-        {
-            pchildnodes[index]->waitingresult--; //not waiting for result
+        {   
+            //the fisrt command of this node is finished, before removing it, we need handle its parent command
+            
+        	  //for parent command: waitingresult-- 
+        	  assert(pcommand != NULL);
+        	  pcommand->command.waitingresult--;
+        	  if(pcommand->command.waitingresult == 0)
+        	  {
+        	      assert(pcommand->command.waitinginput == 0);
+
+        	      //remove pcommand;
+        	      if(pcommand->prev == NULL)
+        	      {
+        	          pcli->firstcommand = pcommand->next;
+        	          if(pcli->firstcommand != NULL)
+        	          {
+        	              pcli->firstcommand->prev = NULL;
+        	          }
+        	      }
+        	      else
+        	      {
+        	          pcommand->prev->next = pcommand->next;
+        	          if(pcommand->next != NULL) //pcommand is not last
+        	          {
+                        pcommand->next->prev = pcommand->prev;
+        	          }
+        	          else
+        	          {
+        	              pcli->lastcommand = pcommand->prev;
+        	          }
+        	      }
+  	            free(pcommand);
+        	  }
+        	  
+        	  //remove fisrt command of this node
+            assert(pchildnodes[index]->firstcommand != NULL);
+            pcommand =pchildnodes[index]->firstcommand;
+            pchildnodes[index]->firstcommand = pchildnodes[index]->firstcommand->next;
+            if(pchildnodes[index]->firstcommand != NULL)
+            {
+                pchildnodes[index]->firstcommand->prev = NULL;
+            }
+            free(pcommand);
         }
-        
-        if(strcasecmp(pchildnodes[index]->command, "get node info") == 0)
+        else if(strcasecmp(pchildnodes[index]->firstcommand->command.name, "get node info") == 0 &&
+        	       strncasecmp(start, "ID:", strlen("ID:")) == 0 )
         {
-            pchildnodes[index]->id = atoi(start);
+            pchildnodes[index]->id = atoi(start + strlen("ID:"));
         }
 
         sprintf(outbuf, "%s(%s:%d)\n", start, pchildnodes[index]->ip, pchildnodes[index]->serverport);
@@ -274,34 +375,13 @@ void handle_node_response(int index)
         }
         pchildnodes[index]->buffer[i] = '\0';
     }
-    
-    
-    int waiting_result = 0;
-    for(i = 0; i < MAX_NODE_COUNT; i++)
-    {
-        if(pchildnodes[i])
-        {
-            waiting_result = waiting_result > pchildnodes[i]->waitingresult ? waiting_result : pchildnodes[i]->waitingresult;
-        }
-    }
-    
-    if(DEBUG)
-    {
-        printf("handle_node_response: waiting_result = %d\n", waiting_result);
-    }
-    
-    if(waiting_result == 0 && pcli != NULL)
-    {
-        pcli->waitingresult = waiting_result;
-    }
 }
 
 void handle_client_request(int index)
 {
 		int  j, t, ret;
     char *str, *start, *end;
-    int  flag; //if there is request send to node and need wait for feedback.
-    
+    struct doom_dh_command_list *pcommand, *pchildcommand;    
 
     ret = recv(pclients[index]->socket,inbuf,BUFFER_SIZE,0);
     if(ret == 0)
@@ -321,7 +401,7 @@ void handle_client_request(int index)
         printf("handle_client_request inbuf = %s", inbuf);
     }
 
-    if( pclients[index]->waitinginput <= 0 && //not waiting for input
+    if( pclients[index]->firstcommand == 0 && //not waiting for input/result
 	      strncasecmp(inbuf, "quit", strlen("quit")) == 0 )
     {
         close(pclients[index]->socket);
@@ -354,10 +434,12 @@ void handle_client_request(int index)
         
         if(DEBUG)
         {
-            printf("handle_client_request: start = %s, pclients[index]->waitingresult = %d, pclients[index]->waitinginput = %d\n", start, pclients[index]->waitingresult, pclients[index]->waitinginput);
+            printf("handle_client_request: start = %s, client index = %d\n", start, index);
+            dump_command_status(pclients[index]->firstcommand);
         }
 
-        if(pclients[index]->waitinginput == 0) //waiting input for new request
+        if(pclients[index]->lastcommand == NULL || //no command
+        	 pclients[index]->lastcommand->command.waitinginput == 0) //finish input for last command
         {
             if(DEBUG)
             {
@@ -365,91 +447,117 @@ void handle_client_request(int index)
             }
             if(strncasecmp(start, "MNG:", strlen("MNG:")) == 0)
             {
-                strcpy(pclients[index]->command, skip_space(start + strlen("MNG:")));
-                if(strcasecmp(pclients[index]->command, "add child node") == 0)
+                //create a new command
+                pcommand = (struct doom_dh_command_list *)malloc(sizeof(struct doom_dh_command_list));
+                pcommand->command.id            = commandid++;
+                pcommand->command.parentid      = -1; //this is already a parent command
+                pcommand->command.waitinginput  = 0;
+                pcommand->command.waitingresult = 0;
+                pcommand->prev = pcommand->next = NULL;
+                strcpy(pcommand->command.name, skip_space(start + strlen("MNG:")));
+                
+                if(strcasecmp(pcommand->command.name, "add child node") == 0)
                 {
-                    pclients[index]->waitinginput = 1;
-                    flag = 0;
+                    pcommand->command.waitinginput = 1;
                     for(j = 0; j < MAX_NODE_COUNT; j++)
                     {
                         if(pchildnodes[j] != NULL)
                         {
                             sprintf(outbuf, "MNG: add sibling node\n");
                             send(pchildnodes[j]->socket,outbuf, strlen(outbuf), 0);
-                            strcpy(pchildnodes[j]->command, "add sibling node");
-                            pchildnodes[j]->waitingresult++;
-                            pclients[index]->waitingresult++;
-                            flag = 1;
+
+                            pchildcommand = (struct doom_dh_command_list *)malloc(sizeof(struct doom_dh_command_list));
+                            pchildcommand->command.id            = commandid++;
+                            pchildcommand->command.parentid      = pcommand->command.id;
+                            pchildcommand->command.waitinginput  = 1;
+                            pchildcommand->command.waitingresult = 1;
+                            pchildcommand->prev = pchildcommand->next = NULL;
+                            strcpy(pchildcommand->command.name, "add sibling node");
+                            
+                            add_childcommand(pchildnodes[j], pchildcommand);
+                            pcommand->command.waitingresult++;
                         }
                     }
-                    if(flag)
-                    {
-                        pclients[index]->waitingresult++;
-                    }
+                    add_command(pclients[index], pcommand);
+                    
                 }
-                else if(strcasecmp(pclients[index]->command, "get node info") == 0)
+                else if(strcasecmp(pcommand->command.name, "get node info") == 0)
                 {
-                    pclients[index]->waitinginput = 1;
-                    flag = 0;
+                    pcommand->command.waitinginput = 1;
                     for(j = 0; j < MAX_NODE_COUNT; j++)
                     {
                         if(pchildnodes[j] != NULL)
                         {
-                            sprintf(outbuf, "MNG: %s\n", pclients[index]->command);
+                            sprintf(outbuf, "MNG: %s\n", pcommand->command.name);
                             send(pchildnodes[j]->socket,outbuf, strlen(outbuf), 0);
-                            strcpy(pchildnodes[j]->command, pclients[index]->command);
-                            pchildnodes[j]->waitingresult++;
-                            flag = 1;
+                            
+                            pchildcommand = (struct doom_dh_command_list *)malloc(sizeof(struct doom_dh_command_list));
+                            pchildcommand->command.id            = commandid++;
+                            pchildcommand->command.parentid      = pcommand->command.id;
+                            pchildcommand->command.waitinginput  = 1;
+                            pchildcommand->command.waitingresult = 1;
+                            pchildcommand->prev = pchildcommand->next = NULL;
+                            strcpy(pchildcommand->command.name, "get node info");
+                            
+                            add_childcommand(pchildnodes[j], pchildcommand);
+                            pcommand->command.waitingresult++;
                         }
                     }
-                    if(flag)
-                    {
-                        pclients[index]->waitingresult++;
-                    }
+                    add_command(pclients[index], pcommand);
                 }
                 else
                 {
-                    printf("error MNG command %s\n", pclients[index]->command);
+                    printf("error MNG command %s\n", pcommand->command.name);
+                    free(pcommand);
                 }
             }
             else if(strncasecmp(start, "TSK:", strlen("TSK:")) == 0)
             {
-                strcpy(pclients[index]->command, skip_space(start + strlen("TSK:")));
+                //create a new command
+                pcommand = (struct doom_dh_command_list *)malloc(sizeof(struct doom_dh_command_list));
+                pcommand->command.id            = commandid++;
+                pcommand->command.parentid      = -1; //this is already a parent command
+                pcommand->command.waitinginput  = 0;
+                pcommand->command.waitingresult = 0;
+                pcommand->prev = pcommand->next = NULL;
+                strcpy(pcommand->command.name, skip_space(start + strlen("TSK:")));
+                
                 if(DEBUG)
                 {
-                    printf("handle_client_request handle TSK command = %s\n", pclients[index]->command);
+                    printf("handle_client_request handle TSK command = %s\n", pcommand->command.name);
                 }
-                if(strcasecmp(pclients[index]->command, "create database") == 0 ||
-                   strcasecmp(pclients[index]->command, "set database")    == 0 ||
-                   strcasecmp(pclients[index]->command, "execute ddl")     == 0 ||
-                	 strcasecmp(pclients[index]->command, "execute dml")     == 0 ||
-                	 strcasecmp(pclients[index]->command, "execute dql")     == 0)
+                if(strcasecmp(pcommand->command.name, "create database") == 0 ||
+                   strcasecmp(pcommand->command.name, "set database")    == 0 ||
+                   strcasecmp(pcommand->command.name, "execute ddl")     == 0 ||
+                	 strcasecmp(pcommand->command.name, "execute dml")     == 0 ||
+                	 strcasecmp(pcommand->command.name, "execute dql")     == 0)
                 {
-                    pclients[index]->waitinginput = 1;
-                    flag = 0;
+                    pcommand->command.waitinginput = 1;
                     for(j = 0; j < MAX_NODE_COUNT; j++)
                     {
                         if(pchildnodes[j] != NULL)
                         {
-                            sprintf(outbuf, "TSK: %s\n", pclients[index]->command);
+                            sprintf(outbuf, "TSK: %s\n", pcommand->command.name);
                             send(pchildnodes[j]->socket,outbuf, strlen(outbuf), 0);
-                            strcpy(pchildnodes[j]->command, pclients[index]->command);
-                            pchildnodes[j]->waitingresult++;
-                            flag = 1;
+
+                            pchildcommand = (struct doom_dh_command_list *)malloc(sizeof(struct doom_dh_command_list));
+                            pchildcommand->command.id            = commandid++;
+                            pchildcommand->command.parentid      = pcommand->command.id;
+                            pchildcommand->command.waitinginput  = 1;
+                            pchildcommand->command.waitingresult = 1;
+                            pchildcommand->prev = pchildcommand->next = NULL;
+                            strcpy(pchildcommand->command.name, pcommand->command.name);
+
+                            add_childcommand(pchildnodes[j], pchildcommand);
+                            pcommand->command.waitingresult++;
                         }
                     }
-                    if(DEBUG)
-                    {
-                        printf("handle_client_request handle TSK flag = %d\n", flag);
-                    }
-                    if(flag)
-                    {
-                        pclients[index]->waitingresult++;
-                    }
+                    add_command(pclients[index], pcommand);
                 }
                 else
                 {
-                    printf("error TSK command %s\n", pclients[index]->command);
+                    printf("error TSK command %s\n", pcommand->command.name);
+                    free(pcommand);
                 }
             }
             else
@@ -457,9 +565,9 @@ void handle_client_request(int index)
                 printf("error request %s\n", start);
             }
         }
-        else if(pclients[index]->waitinginput == 1) //waiting for input
+        else if(pclients[index]->lastcommand != NULL && pclients[index]->lastcommand->command.waitinginput == 1) //waiting for input
         {
-            if(strcasecmp(pclients[index]->command, "add child node") == 0)	
+            if(strcasecmp(pclients[index]->lastcommand->command.name, "add child node") == 0)	
             {
                 struct doom_dh_node* pnode;
                 if(strcasecmp(start, "/MNG") != 0)
@@ -480,13 +588,19 @@ void handle_client_request(int index)
                                     //start add sibling node
                                     sprintf(outbuf, "MNG: add sibling node\n");
                                     send(pchildnodes[j]->socket,outbuf, strlen(outbuf), 0);
-                                    strcpy(pchildnodes[j]->command, "add sibling node");
-                                    pchildnodes[j]->waitingresult++;
-                                    if(flag == 0)
-                                    {
-                                       flag = 1;	
-                                       pclients[index]->waitingresult++;
-                                    }
+
+
+                                    pchildcommand = (struct doom_dh_command_list *)malloc(sizeof(struct doom_dh_command_list));
+                                    pchildcommand->command.id            = commandid++;
+                                    pchildcommand->command.parentid      = pclients[index]->lastcommand->command.id;
+                                    pchildcommand->command.waitinginput  = 1;
+                                    pchildcommand->command.waitingresult = 1;
+                                    pchildcommand->prev = pchildcommand->next = NULL;
+                                    strcpy(pchildcommand->command.name, "add sibling node");
+                            
+                                    add_childcommand(pchildnodes[j], pchildcommand);
+                                    pcommand->command.waitingresult++;
+
                                 }
                             }
                         }
@@ -500,21 +614,22 @@ void handle_client_request(int index)
                         if(pchildnodes[j] != NULL)
                         {
                             send(pchildnodes[j]->socket,outbuf, strlen(outbuf), 0);
+                            pchildnodes[j]->lastcommand->command.waitinginput = 0;
                         }
                     }
-                    pclients[index]->waitinginput = 0; //no need to wait for input
+                    pclients[index]->lastcommand->command.waitinginput = 0; //no need to wait for input
                 }
             }
-            else if(strcasecmp(pclients[index]->command, "create database") == 0 ||
-            	       strcasecmp(pclients[index]->command, "get node info")   == 0 ||
-                     strcasecmp(pclients[index]->command, "set database")    == 0 ||
-                     strcasecmp(pclients[index]->command, "execute ddl")     == 0 ||
-                	   strcasecmp(pclients[index]->command, "execute dml")     == 0 ||
-                	   strcasecmp(pclients[index]->command, "execute dql")     == 0)
+            else if(strcasecmp(pclients[index]->lastcommand->command.name, "create database") == 0 ||
+            	       strcasecmp(pclients[index]->lastcommand->command.name, "get node info")   == 0 ||
+                     strcasecmp(pclients[index]->lastcommand->command.name, "set database")    == 0 ||
+                     strcasecmp(pclients[index]->lastcommand->command.name, "execute ddl")     == 0 ||
+                	   strcasecmp(pclients[index]->lastcommand->command.name, "execute dml")     == 0 ||
+                	   strcasecmp(pclients[index]->lastcommand->command.name, "execute dql")     == 0)
             {
                 if(strcasecmp(start, "/TSK") == 0 || strcasecmp(start, "/MNG") == 0)
                 {
-                    pclients[index]->waitinginput = 0; //no need to wait for input
+                    pclients[index]->lastcommand->command.waitinginput = 0; //no need to wait for input
                 }
                 int id = -1;
                 if(*start == '#')
@@ -532,21 +647,24 @@ void handle_client_request(int index)
                     {
                         sprintf(outbuf, "%s\n", start);
                         send(pchildnodes[j]->socket,outbuf, strlen(outbuf), 0);
+                        if(strcasecmp(start, "/TSK") == 0 || strcasecmp(start, "/MNG") == 0)
+                        {
+                            pchildnodes[j]->lastcommand->command.waitinginput = 0; //no need to wait for input
+                        }
                     }
                 }
             }
             else
             {
-                printf("error request %s, command=%s\n", start, pclients[index]->command);
+                printf("error request %s, command=%s\n", start, pclients[index]->lastcommand->command.name);
             }
         }
         else
         {
-            printf("server is not ready to handle request waitinginput=%d, waitingresult=%d, request=%s\n", 
-                    pclients[index]->waitinginput, pclients[index]->waitingresult, start);
+            printf("server is not ready to handle request!\n");
+            dump_command_status(pclients[index]->firstcommand);
         }
 
-        //strcpy(pclients[index]->buffer, str); //handle one line
         j = 0;
         while(str[j] != '\0')
         {
@@ -616,7 +734,8 @@ int main(int argc, char* argv[])
             {
                 if(pclients[i] != NULL)
                 {
-                    printf("client[%d](%s:%d),waitinginput=%d, waitingresult=%d\n", i, pclients[i]->ip, pclients[i]->port, pclients[i]->waitinginput, pclients[i]->waitingresult);
+                    printf("client[%d](%s:%d)\n", i, pclients[i]->ip, pclients[i]->port);
+                    dump_command_status(pclients[i]->firstcommand);
                 }
             }
             printf("\nchild node socket status:\n");
@@ -624,52 +743,24 @@ int main(int argc, char* argv[])
             {
                 if(pchildnodes[j] != NULL)
                 {
-                    printf("childnode[%d](%s:%d),waitinginput=%d, waitingresult=%d\n", j, pchildnodes[j]->ip, pchildnodes[j]->serverport, pchildnodes[j]->waitinginput, pchildnodes[j]->waitingresult);
+                    printf("childnode[%d](%s:%d)\n", j, pchildnodes[j]->ip, pchildnodes[j]->serverport);
+                    dump_command_status(pchildnodes[j]->firstcommand);
                 }
             }
         }
         //dump end
         
-        //check if there is client waiting for input or result
-        struct doom_dh_client *pcli = NULL;
         for(i = 0; i < MAX_CLIENT_COUNT; i++)
         {
-            if(pclients[i] != NULL && (pclients[i]->waitinginput > 0 || pclients[i]->waitingresult > 0) )
+            if(pclients[i] != NULL)
             {
-                pcli = pclients[i];
-                break;
-            }
-        }
-        if(pcli == NULL) //there is no client waiting for input or result, receive msg from all client
-        {	
-            for(i = 0; i < MAX_CLIENT_COUNT; i++)
-            {
-                if(pclients[i] != NULL)
-                {
-                    FD_SET(pclients[i]->socket, &rdfs);
-                    max_fd = pclients[i]->socket > max_fd ? pclients[i]->socket : max_fd;
-                    if(DEBUG)
-                    {
-                        printf("select from client[%d]\n", i);
-                    }
-                }
-            }
-        }
-        else // there is one client who is waiting for input or result.
-        {
-            if(pclients[i]->waitinginput > 0) //receive msg from this client when it is also waiting for input
-            {
-                FD_SET(pcli->socket, &rdfs);
-                max_fd = pcli->socket > max_fd ? pcli->socket : max_fd;
-                if(DEBUG)
-                {
-                    printf("select from client[%d]\n", i);
-                }
+                FD_SET(pclients[i]->socket, &rdfs);
+                max_fd = pclients[i]->socket > max_fd ? pclients[i]->socket : max_fd;
             }
         }
         for(i = 0; i < MAX_NODE_COUNT; i++)
         {
-            if(pchildnodes[i] != NULL && pchildnodes[i]->waitingresult > 0) //only receive the msg from nodes who are waiting for result. 
+            if(pchildnodes[i] != NULL && pchildnodes[i]->firstcommand != NULL) //only receive the msg from nodes who are waiting for result. 
             {
                 FD_SET(pchildnodes[i]->socket, &rdfs);
                 max_fd = pchildnodes[i]->socket > max_fd ? pchildnodes[i]->socket : max_fd;
@@ -723,12 +814,11 @@ int main(int argc, char* argv[])
                         if(pclients[i] == NULL)
                         {
                             pclients[i] = (struct doom_dh_client*)malloc(sizeof(struct doom_dh_client));
-                            pclients[i]->socket    = cli;
+                            pclients[i]->socket        = cli;
                             strcpy(pclients[i]->ip,inet_ntoa(cliaddr.sin_addr));
-                            pclients[i]->port = ntohs(cliaddr.sin_port);
-                            pclients[i]->command[0]    = '\0';
-                            pclients[i]->waitinginput  = 0;
-                            pclients[i]->waitingresult = 0;
+                            pclients[i]->port          = ntohs(cliaddr.sin_port);
+                            pclients[i]->firstcommand  = NULL;
+                            pclients[i]->lastcommand   = NULL;
                             pclients[i]->buffer[0]     = '\0';
                             break;
                         }

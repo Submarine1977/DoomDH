@@ -18,9 +18,25 @@
 #define MAX_SERVER_COUNT 128
 #define MAX_DB_COUNT     128
                               
-int       serverid;                                   
+int       nodeid;                                   
 char      inbuf[BUFFER_SIZE];
 char      outbuf[BUFFER_SIZE];  
+
+int commandid = 1;
+struct doom_dh_command
+{
+    int  id;
+    int  parentid;
+    char name[32];
+    int  waitinginput;
+    int  waitingresult;
+};
+
+struct doom_dh_command_list
+{
+    struct doom_dh_command command;
+    struct doom_dh_command_list *prev, *next;
+};
 
 struct doom_dh_node
 {
@@ -28,8 +44,7 @@ struct doom_dh_node
     char  ip[16];
     int   port;   
     
-    char  command[32];
-    int   status;     //0--idle; 1--waiting for input; 2--waiting for result; 3--waiting for input & result
+    struct doom_dh_command_list *firstcommand,*lastcommand;
     char  buffer[BUFFER_SIZE*2];
 };
 struct    doom_dh_node*  psiblingnodes[MAX_NODE_COUNT];
@@ -40,8 +55,7 @@ struct doom_dh_server
     char  ip[16];
     int   port;
     
-    char  command[32];
-    int   status;   //0--idle; 1--waiting for input; 2--waiting for result; 3--waiting for input & result
+    struct doom_dh_command_list *firstcommand,*lastcommand;
     char  buffer[BUFFER_SIZE*2];
 };
 struct    doom_dh_server*  pservers[MAX_SERVER_COUNT];
@@ -54,7 +68,6 @@ struct doom_dh_database
 };
 struct doom_dh_database  databases[MAX_DB_COUNT];
 struct doom_dh_database  *pcurrentdb = NULL;
-
 
 char * skip_space(char* str)
 {
@@ -73,6 +86,65 @@ char * back_skip_space(char* end)
     }
     return end + 1;
 };
+
+void add_siblingcommand(struct doom_dh_node* pnode, struct doom_dh_command_list *pcommand)
+{
+    if(pnode->firstcommand == NULL)
+    {
+        pnode->firstcommand = pnode->lastcommand = pcommand;
+    }
+    else
+    {
+        pnode->lastcommand->next = pcommand;
+        pcommand->prev = pnode->lastcommand;
+        pnode->lastcommand = pcommand;
+    }
+}
+
+void add_command(struct doom_dh_server* pserver, struct doom_dh_command_list *pcommand)
+{
+    if(pserver->firstcommand == NULL)
+    {
+        pserver->firstcommand = pserver->lastcommand = pcommand;
+    }
+    else
+    {
+        pserver->lastcommand->next = pcommand;
+        pcommand->prev = pserver->lastcommand;
+        pserver->lastcommand = pcommand;
+    }
+}
+
+struct doom_dh_command_list *get_command(int commandid, struct doom_dh_server **ppser)
+{
+    int i;
+    struct doom_dh_command_list* pcommand = NULL;
+    for(i = 0; i < MAX_SERVER_COUNT; i++)
+    {
+        pcommand = pservers[i]->firstcommand;
+        while(pcommand != NULL)
+        {
+            if(pcommand->command.id == commandid)
+            {
+                *ppser = pservers[i];
+                return pcommand;
+            }
+        }
+    }
+    *ppser = NULL;
+    return NULL;
+}
+
+
+void dump_command_status(struct doom_dh_command_list *pcommand)
+{
+    while(pcommand != NULL)
+    {
+        printf("%d,%d,%s,%d,%d\n", pcommand->command.id, pcommand->command.parentid, pcommand->command.name, pcommand->command.waitinginput, pcommand->command.waitingresult);
+        pcommand = pcommand->next;
+    }
+}
+
 
 void execute_ddl_dml(char* buffer, int server)
 {
@@ -135,7 +207,6 @@ void execute_dql(char* buffer, int server)
         }
     }
     sqlite3_finalize(statement);
-    send(server,outbuf, strlen(outbuf), 0);
 };
 
 struct doom_dh_database* set_database(char* buffer, int server)
@@ -232,7 +303,7 @@ void get_node_info(char* buffer, int server)
 
     if(strcasecmp(name, "ID") == 0)
     {
-        sprintf(outbuf, "%d\n", serverid);
+        sprintf(outbuf, "ID:%d\n", nodeid);
         send(server,outbuf, strlen(outbuf), 0);
         return;
     }
@@ -246,9 +317,8 @@ struct doom_dh_node* add_sibling_node(char* buffer, int server)
     char* port;
     struct sockaddr_in nodeaddr;  
                     
-    ip  = buffer;
-    while(*ip == ' ') 
-        ip++;
+    ip = skip_space(buffer);
+
     port = ip;
     while(*port != ':')
     {
@@ -262,6 +332,11 @@ struct doom_dh_node* add_sibling_node(char* buffer, int server)
     }
     *port = '\0';
     port ++;
+
+    if(DEBUG)
+    {
+        printf("add_sibling_node %s %s\n", ip, port);
+    }     
     
     for(j = 0; j < MAX_NODE_COUNT; j++)
     {
@@ -296,6 +371,8 @@ struct doom_dh_node* add_sibling_node(char* buffer, int server)
         strcpy(psiblingnodes[j]->ip, ip);
         psiblingnodes[j]->port = atoi(port);
         psiblingnodes[j]->socket = socket(AF_INET,SOCK_STREAM,0);
+        psiblingnodes[j]->firstcommand  = NULL;
+        psiblingnodes[j]->lastcommand   = NULL;
 
         nodeaddr.sin_family =AF_INET;  
         nodeaddr.sin_port   = htons(psiblingnodes[j]->port);
@@ -315,7 +392,6 @@ struct doom_dh_node* add_sibling_node(char* buffer, int server)
             send(server,outbuf, strlen(outbuf), 0);
             return psiblingnodes[j];
         }
-        
     }
     else
     {
@@ -326,15 +402,44 @@ struct doom_dh_node* add_sibling_node(char* buffer, int server)
 };
 
 //handle server request
-void handle_server_request(struct doom_dh_server* pser)
+void handle_server_request(int index)
 {
-		int  j, t;
+		int  j, t, ret;
     char *str, *start, *end;
+    struct doom_dh_command_list *pcommand, *pchildcommand;    
     
+    ret = recv(pservers[index]->socket,inbuf,BUFFER_SIZE,0);
+    if(ret == 0)
+    {   
+        close(pservers[index]->socket);
+        printf("Server connection %s:%d closed!\n", pservers[index]->ip, pservers[index]->port);
+        free(pservers[index]);
+        pservers[index] = NULL;
+    }
+    else if(ret < 0)
+    {
+        printf("error recieve data, errno = %d\n", errno);
+    }
+    //ret > 0
+    if(DEBUG)
+    {
+        printf("handle_client_request inbuf = %s", inbuf);
+    }
+
+    if( pservers[index]->firstcommand == 0 && //not waiting for input/result
+	      strncasecmp(inbuf, "quit", strlen("quit")) == 0 )
+    {
+        close(pservers[index]->socket);
+        printf("Connection %s:%d closed!\n", pservers[index]->ip, pservers[index]->port);
+        free(pservers[index]);
+        pservers[index] = NULL;
+    }
+    strcat(pservers[index]->buffer, inbuf);
+
     while(1)
     {
         //get one line
-        str   = skip_space(pser->buffer);
+        str   = skip_space(pservers[index]->buffer);
         start = end = str;
         while(*end != '\r' && *end != '\n' && *end != '\0')
         {
@@ -352,41 +457,73 @@ void handle_server_request(struct doom_dh_server* pser)
         end = back_skip_space(end);
         *end = '\0';
 
-        if(pser->status == 0) //idle
+        if(DEBUG)
         {
-            if(strncasecmp(start, "MNG:", strlen("MNG:")) == 0)
+            printf("handle_server_request: start = %s, server index = %d\n", start, index);
+            dump_command_status(pservers[index]->firstcommand);
+        }
+
+        if(pservers[index]->lastcommand == NULL || //no command
+        	 pservers[index]->lastcommand->command.waitinginput == 0) //finish input for last command
+        {
+            if(DEBUG)
             {
-                strcpy(pser->command, skip_space(start + strlen("MNG:")));
-                if( strcasecmp(pser->command, "add sibling node") != 0 && 
-                	  strcasecmp(pser->command, "get node id") != 0)
+                printf("handle_server_request handle input start = %s\n", start);
+            }
+             if(strncasecmp(start, "MNG:", strlen("MNG:")) == 0)
+            {
+                //create a new command
+                pcommand = (struct doom_dh_command_list *)malloc(sizeof(struct doom_dh_command_list));
+                pcommand->command.id            = commandid++;
+                pcommand->command.parentid      = -1; //this is already a parent command
+                pcommand->command.waitinginput  = 0;
+                pcommand->command.waitingresult = 0;
+                pcommand->prev = pcommand->next = NULL;
+                strcpy(pcommand->command.name, skip_space(start + strlen("MNG:")));
+
+                if( strcasecmp(pcommand->command.name, "add sibling node") != 0 && 
+                	  strcasecmp(pcommand->command.name, "get node id") != 0)
                 {
-                    printf("error MNG command %s\n", pser->command);
+                    printf("error MNG command %s\n", pcommand->command.name);
+                    free(pcommand);
                 }
                 else
                 {
-                    pser->status = 1;
-                    sprintf(outbuf, "RES:%s\n", pser->command);
-                    send(pser->socket,outbuf, strlen(outbuf), 0);
+                    pcommand->command.waitinginput = 1;
+                    add_command(pservers[index], pcommand);
+                    
+                    sprintf(outbuf, "RES:%s\n", pcommand->command.name);
+                    send(pservers[index]->socket,outbuf, strlen(outbuf), 0);
                 }
             }
             else if(strncasecmp(start, "TSK:", strlen("TSK:")) == 0)
             {
-                strcpy(pser->command, skip_space(start + strlen("TSK:")));
+                //create a new command
+                pcommand = (struct doom_dh_command_list *)malloc(sizeof(struct doom_dh_command_list));
+                pcommand->command.id            = commandid++;
+                pcommand->command.parentid      = -1; //this is already a parent command
+                pcommand->command.waitinginput  = 0;
+                pcommand->command.waitingresult = 0;
+                pcommand->prev = pcommand->next = NULL;
+                strcpy(pcommand->command.name, skip_space(start + strlen("TSK:")));
                 
-                if( strcasecmp(pser->command, "create database")  != 0 &&
-                	  strcasecmp(pser->command, "set database")     != 0 &&
-                	  strcasecmp(pser->command, "execute ddl")      != 0 &&
-                	  strcasecmp(pser->command, "execute dml")      != 0 &&
-                	  strcasecmp(pser->command, "execute dql")      != 0 &&
-                	  strcasecmp(pser->command, "import csv")      != 0 )
+                if( strcasecmp(pcommand->command.name, "create database")  != 0 &&
+                	  strcasecmp(pcommand->command.name, "set database")     != 0 &&
+                	  strcasecmp(pcommand->command.name, "execute ddl")      != 0 &&
+                	  strcasecmp(pcommand->command.name, "execute dml")      != 0 &&
+                	  strcasecmp(pcommand->command.name, "execute dql")      != 0 &&
+                	  strcasecmp(pcommand->command.name, "import csv")      != 0 )
                 {
-                    printf("error TSK command %s\n", pser->command);
+                    printf("error TSK command %s\n", pcommand->command.name);
+                    free(pcommand);
                 }
                 else
                 {
-                    sprintf(outbuf, "RES:%s\n", pser->command);
-                    send(pser->socket,outbuf, strlen(outbuf), 0);
-                    pser->status = 1;
+                    pcommand->command.waitinginput = 1;
+                    add_command(pservers[index], pcommand);
+                    
+                    sprintf(outbuf, "RES:%s\n", pcommand->command.name);
+                    send(pservers[index]->socket,outbuf, strlen(outbuf), 0);
                 }
             }
             else
@@ -394,64 +531,86 @@ void handle_server_request(struct doom_dh_server* pser)
                 printf("error request %s\n", start);
             }
         }
-        else if(pser->status & 1) //waiting for input
+        else if(pservers[index]->lastcommand != NULL && pservers[index]->lastcommand->command.waitinginput == 1) //waiting for input
         {
             if(strcasecmp(start, "/MNG") != 0 && strcasecmp(start, "/TSK") != 0 )
             {	
-                if(strcasecmp(pser->command, "add sibling node") == 0)	
+                if(strcasecmp(pservers[index]->lastcommand->command.name, "add sibling node") == 0)	
                 {
-                    add_sibling_node(start, pser->socket);
+                    add_sibling_node(start, pservers[index]->socket);
                 }
-                else if(strcasecmp(pser->command, "get node info") == 0)	
+                else if(strcasecmp(pservers[index]->lastcommand->command.name, "get node info") == 0)	
                 {
-                    get_node_info(start, pser->socket);
+                    get_node_info(start, pservers[index]->socket);
                 }
-                else if(strcasecmp(pser->command, "create database") == 0)	
+                else if(strcasecmp(pservers[index]->lastcommand->command.name, "create database") == 0)	
                 {
-                    create_database(start, pser->socket);
+                    create_database(start, pservers[index]->socket);
                 }
-                if(strcasecmp(pser->command, "set database") == 0)	
+                else if(strcasecmp(pservers[index]->lastcommand->command.name, "set database") == 0)	
                 {
-                    set_database(start, pser->socket);
+                    set_database(start, pservers[index]->socket);
                 }
-                else if(strcasecmp(pser->command, "execute ddl") == 0)	
+                else if(strcasecmp(pservers[index]->lastcommand->command.name, "execute ddl") == 0)	
                 {
-                    execute_ddl_dml(start, pser->socket);
+                    execute_ddl_dml(start, pservers[index]->socket);
                 }
-                else if(strcasecmp(pser->command, "execute dml") == 0)	
+                else if(strcasecmp(pservers[index]->lastcommand->command.name, "execute dml") == 0)	
                 {
-                    execute_ddl_dml(start, pser->socket);
+                    execute_ddl_dml(start, pservers[index]->socket);
                 }
-                else if(strcasecmp(pser->command, "execute dql") == 0)	
+                else if(strcasecmp(pservers[index]->lastcommand->command.name, "execute dql") == 0)	
                 {
-                    execute_dql(start, pser->socket);
+                    execute_dql(start, pservers[index]->socket);
                 }
-                else if(strcasecmp(pser->command, "import csv") == 0)	
+                else if(strcasecmp(pservers[index]->lastcommand->command.name, "import csv") == 0)	
                 {
-                    execute_dql(start, pser->socket);
+                    execute_dql(start, pservers[index]->socket);
                 }
                 else
                 {
-                    printf("error request %s, command=%s\n", start, pser->command);
+                    printf("error request %s, command=%s\n", start, pservers[index]->lastcommand->command.name);
                 }
             }
             else
             {
                 sprintf(outbuf, "/RES\n");
-                send(pser->socket,outbuf, strlen(outbuf), 0);
-                pser->status &= 2; //no need to wait for input
+                send(pservers[index]->socket,outbuf, strlen(outbuf), 0);
+                pservers[index]->lastcommand->command.waitinginput = 0; //no need to wait for input
+                if(pservers[index]->lastcommand->command.waitingresult == 0)
+                {
+                    //remove last command;
+                    pservers[index]->lastcommand = pservers[index]->lastcommand->prev;
+                    if(pservers[index]->lastcommand == NULL)
+                    {
+                        free(pservers[index]->firstcommand);
+                        pservers[index]->firstcommand = NULL;
+                    }
+                    else
+                    {
+                        free(pservers[index]->lastcommand->next);
+                        pservers[index]->lastcommand->next = NULL;
+                    }
+                }
             }
         }
         else
         {
-            printf("node is not ready to handle request status=%d, request=%s\n", pser->status, start);
+            printf("node is not ready to handle request\n");
+            dump_command_status(pservers[index]->firstcommand);
         }
-        strcpy(pser->buffer, str); //handle one line
+        j = 0;
+        while(str[j] != '\0')
+        {
+            pservers[index]->buffer[j] = str[j];
+            j++;
+        }
+        pservers[index]->buffer[j] = '\0';
     }
 };
 
 //handle node request
-void handle_node_request(struct doom_dh_node* pnode)
+void handle_node_request(int index)
 {
 };
 
@@ -469,7 +628,7 @@ int main(int argc, char* argv[])
         return 1;
     }
     
-    serverid   = atoi(argv[1]);
+    nodeid   = atoi(argv[1]);
     serverport = atoi(argv[3]);
     nodeport   = atoi(argv[4]);
 
@@ -537,7 +696,8 @@ int main(int argc, char* argv[])
             {
                 if(pservers[i] != NULL)
                 {
-                    printf("pservers[%d](%s:%d),status=%d\n", i, pservers[i]->ip, pservers[i]->port, pservers[i]->status);
+                    printf("pservers[%d](%s:%d)\n", i, pservers[i]->ip, pservers[i]->port);
+                    dump_command_status(pservers[i]->firstcommand);
                 }
             }
             printf("\nsibling node socket status:\n");
@@ -545,48 +705,31 @@ int main(int argc, char* argv[])
             {
                 if(psiblingnodes[j] != NULL)
                 {
-                    printf("psiblingnodes[%d](%s:%d),status=%d\n", j, psiblingnodes[j]->ip, psiblingnodes[j]->port, psiblingnodes[j]->status);
+                    printf("psiblingnodes[%d](%s:%d)\n", j, psiblingnodes[j]->ip, psiblingnodes[j]->port);
+                    dump_command_status(psiblingnodes[j]->firstcommand);
                 }
             }
         }
         //dump end
         
-        //check if there is client server for input or result
-        struct doom_dh_server *pser = NULL;
         for(i = 0; i < MAX_SERVER_COUNT; i++)
         {
-            if(pservers[i] != NULL && pservers[i]->status != 0)
+            if(pservers[i] != NULL)
             {
-                pser = pservers[i];
-                break;
-            }
-        }
-        if(pser == NULL) //there is no client waiting for input or result, receive msg from all client
-        {	
-            for(i = 0; i < MAX_SERVER_COUNT; i++)
-            {
-                if(pservers[i] != NULL)
-                {
-                    FD_SET(pservers[i]->socket, &rdfs);
-                    max_fd = pservers[i]->socket > max_fd ? pservers[i]->socket : max_fd;
-                }
-            }
-        }
-        else // there is one server who is waiting for input or result.
-        {
-            if(pser->status & 1) //receive msg from this server when it is also waiting for input
-            {
-                FD_SET(pser->socket, &rdfs);
-                max_fd = pser->socket > max_fd ? pser->socket : max_fd;
-                        	
+                FD_SET(pservers[i]->socket, &rdfs);
+                max_fd = pservers[i]->socket > max_fd ? pservers[i]->socket : max_fd;
             }
         }
         for(i = 0; i < MAX_NODE_COUNT; i++)
         {
-            if(psiblingnodes[i] != NULL && (psiblingnodes[i]->status & 2)) //only receive the msg from nodes who are waiting for result. 
+            if(psiblingnodes[i] != NULL && psiblingnodes[i]->firstcommand != NULL) //only receive the msg from nodes who are waiting for result. 
             {
                 FD_SET(psiblingnodes[i]->socket, &rdfs);
                 max_fd = psiblingnodes[i]->socket > max_fd ? psiblingnodes[i]->socket : max_fd;
+                if(DEBUG)
+                {
+                    printf("select from psiblingnodes[%d]\n", i);
+                }
             }
         }
         ret = select(max_fd + 1,&rdfs,NULL, NULL, NULL);
@@ -636,8 +779,8 @@ int main(int argc, char* argv[])
                             pservers[i]->socket = cli;
                             strcpy(pservers[i]->ip,inet_ntoa(cliaddr.sin_addr));
                             pservers[i]->port = ntohs(cliaddr.sin_port);
-                            pservers[i]->command[0] = '\0';
-                            pservers[i]->status     = 0;
+                            pservers[i]->firstcommand  = NULL;
+                            pservers[i]->lastcommand   = NULL;
                             pservers[i]->buffer[0]  = '\0';
                             break;
                         }
@@ -669,9 +812,9 @@ int main(int argc, char* argv[])
                             psiblingnodes[i]->socket = cli;
                             strcpy(psiblingnodes[i]->ip, inet_ntoa(cliaddr.sin_addr));
                             psiblingnodes[i]->port = ntohs(cliaddr.sin_port);
-                            psiblingnodes[i]->command[0] = '\0';
-                            psiblingnodes[i]->status     = 0;
-                            psiblingnodes[i]->buffer[0]  = '\0';
+                            psiblingnodes[i]->firstcommand = NULL;
+                            psiblingnodes[i]->lastcommand  = NULL;
+                            psiblingnodes[i]->buffer[0]    = '\0';
                             break;
                         }
                     }
@@ -694,86 +837,15 @@ int main(int argc, char* argv[])
                 {
                     if(pservers[i]!= NULL && FD_ISSET(pservers[i]->socket, &rdfs))
                     {
-                        cli = pservers[i]->socket;	
-                        break;
+                        handle_server_request(i);	
                     }
                 }
-                if(i >= MAX_SERVER_COUNT)
+                for(j = 0; j < MAX_NODE_COUNT; j++)
                 {
-                    for(j = 0; j < MAX_NODE_COUNT; j++)
+                    if(psiblingnodes[j] != NULL && FD_ISSET(psiblingnodes[j]->socket, &rdfs))
                     {
-                        if(psiblingnodes[j] != NULL && FD_ISSET(psiblingnodes[j]->socket, &rdfs))
-                        {
-                            cli = psiblingnodes[j]->socket;
-                            break;
-                        }
+                        handle_node_request(j);
                     }
-                    assert(j < MAX_NODE_COUNT);
-                }
-                ret = recv(cli,inbuf,BUFFER_SIZE,0);
-            	  if(ret == 0)
-            	  {   
-            	      close(cli);
-            	      if(i < MAX_SERVER_COUNT)
-            	      {
-                        printf("Client connection %s:%d closed!\n", pservers[i]->ip, pservers[i]->port);
-                        free(pservers[i]);
-                        pservers[i] = NULL;
-            	      }
-            	      else
-            	      {
-            	          printf("Connection %s:%d closed!\n", psiblingnodes[j]->ip, psiblingnodes[j]->port);
-            	          assert(j < MAX_NODE_COUNT);
-            	          free(psiblingnodes[j]);
-            	          psiblingnodes[j] = NULL;
-            	      }
-            	      continue;
-            	  }
-            	  else if(ret < 0)
-            	  {
-            	      printf("error recieve data, errno = %d\n", errno);
-            	      continue;
-                }
-                if(DEBUG)
-                {
-                    printf("%s", inbuf);
-                }
-                //ret > 0
-                if(i < MAX_SERVER_COUNT)
-                {
-                    if( !(pservers[i]->status & 1) && //not waiting for input
-                	      strncasecmp(inbuf, "quit", strlen("quit")) == 0 )
-                    {
-                        close(cli);
-            	          printf("Connection %s:%d closed!\n", pservers[i]->ip, pservers[i]->port);
-                        free(pservers[i]);
-                        pservers[i] = NULL;
-                        continue;
-                    }
-                }
-                else
-                {
-                    if(	!(psiblingnodes[i]->status & 2) && //not waiting for input
-                	      strncasecmp(inbuf, "quit", strlen("quit")) == 0 )
-                	  {
-                        close(cli);
-            	          printf("Connection %s:%d closed!\n", psiblingnodes[j]->ip, psiblingnodes[j]->port);
-            	          assert(j < MAX_NODE_COUNT);
-            	          free(psiblingnodes[j]);
-            	          psiblingnodes[j] = NULL;
-                        continue;
-                    }
-                }
-                
-                if(i < MAX_SERVER_COUNT)
-                {//request from client
-                    strcat(pservers[i]->buffer, inbuf);
-                    handle_server_request(pservers[i]);
-                }
-                else
-                {//response from node
-                    strcat(psiblingnodes[j]->buffer, inbuf);
-                    handle_node_request(psiblingnodes[j]);
                 }
             }
         }
