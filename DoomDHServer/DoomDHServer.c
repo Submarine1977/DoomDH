@@ -10,7 +10,7 @@
 #include<errno.h>
 #include<assert.h>
 
-#define DEBUG            1
+#define DEBUG            0
 #define BUFFER_SIZE      1024
 #define MAX_NODE_COUNT   1024
 #define MAX_CLIENT_COUNT 128
@@ -119,6 +119,7 @@ struct doom_dh_command_list *get_command(int commandid, struct doom_dh_client **
                 *ppcli = pclients[i];
                 return pcommand;
             }
+            pcommand = pcommand->next;
         }
     }
     *ppcli = NULL;
@@ -347,6 +348,13 @@ void handle_node_response(int index)
   	            free(pcommand);
         	  }
         	  
+        	  if(DEBUG)
+            {
+                printf("client(%s:%d)\n", pcli->ip, pcli->port);
+                dump_command_status(pcli->firstcommand);
+            }
+        	  
+        	  
         	  //remove fisrt command of this node
             assert(pchildnodes[index]->firstcommand != NULL);
             pcommand =pchildnodes[index]->firstcommand;
@@ -356,6 +364,13 @@ void handle_node_response(int index)
                 pchildnodes[index]->firstcommand->prev = NULL;
             }
             free(pcommand);
+            
+        	  if(DEBUG)
+            {
+                printf("childnode[%d](%s:%d)\n", index, pchildnodes[index]->ip, pchildnodes[index]->serverport);
+                dump_command_status(pchildnodes[index]->firstcommand);
+            }
+            
         }
         else if(strcasecmp(pchildnodes[index]->firstcommand->command.name, "get node info") == 0 &&
         	       strncasecmp(start, "ID:", strlen("ID:")) == 0 )
@@ -530,7 +545,9 @@ void handle_client_request(int index)
                    strcasecmp(pcommand->command.name, "set database")    == 0 ||
                    strcasecmp(pcommand->command.name, "execute ddl")     == 0 ||
                 	 strcasecmp(pcommand->command.name, "execute dml")     == 0 ||
-                	 strcasecmp(pcommand->command.name, "execute dql")     == 0)
+                	 strcasecmp(pcommand->command.name, "execute dql")     == 0 ||
+                	 strncasecmp(pcommand->command.name, "import csv into", strlen("import csv into")) == 0 //import csv into [table]
+                	)
                 {
                     pcommand->command.waitinginput = 1;
                     for(j = 0; j < MAX_NODE_COUNT; j++)
@@ -625,7 +642,9 @@ void handle_client_request(int index)
                      strcasecmp(pclients[index]->lastcommand->command.name, "set database")    == 0 ||
                      strcasecmp(pclients[index]->lastcommand->command.name, "execute ddl")     == 0 ||
                 	   strcasecmp(pclients[index]->lastcommand->command.name, "execute dml")     == 0 ||
-                	   strcasecmp(pclients[index]->lastcommand->command.name, "execute dql")     == 0)
+                	   strcasecmp(pclients[index]->lastcommand->command.name, "execute dql")     == 0 ||
+                	   strncasecmp(pclients[index]->lastcommand->command.name, "import csv into", strlen("import csv into")) == 0 //import csv into [table]
+                	   )
             {
                 if(strcasecmp(start, "/TSK") == 0 || strcasecmp(start, "/MNG") == 0)
                 {

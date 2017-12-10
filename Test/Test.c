@@ -1,5 +1,5 @@
 #include<stdlib.h>
-#include<stdio.h>  
+#include<stdio.h>
 #include<poll.h>  
 #include<netdb.h>
 #include<sys/types.h>  
@@ -9,20 +9,60 @@
 #include<string.h>  
 #include<errno.h>
 #include<assert.h>
+#include<pthread.h> 
 
-#define DEBUG            1
+
+#define DEBUG            0
 #define BUFFER_SIZE      1024
 
 char      inbuf[BUFFER_SIZE];
 char      outbuf[BUFFER_SIZE];  
 
-int main(int argc, char* argv[])  
+pthread_t ntid; 
+
+
+void *handle_response(void *arg)
 {
-    int max_fd;
-    int ret;
-    struct sockaddr_in seraddr;  
     fd_set  rdfs;
     int ser;
+    int ret;
+    int max_fd;
+    
+    ser = *(int*)arg;
+    while(1)
+    {
+        FD_ZERO(&rdfs);
+        //FD_SET(0, &rdfs);
+        //FD_SET(1, &rdfs);
+        FD_SET(ser, &rdfs);
+        max_fd = ser;
+        ret = select(max_fd + 1,&rdfs,NULL, NULL, NULL);
+        if(ret < 0)
+        {  
+            printf("select error\n");  
+        }
+        else if(ret == 0)
+        {
+            printf("time out\n");
+        }
+        else
+        {
+            if(FD_ISSET(ser, &rdfs)) //from server
+            {
+                ret = recv(ser,inbuf,BUFFER_SIZE,0);
+                printf("%s", inbuf);
+            }
+        }
+    }
+    return (void*)0;
+}
+
+int main(int argc, char* argv[])  
+{
+    int ret;
+    struct sockaddr_in seraddr;  
+    int ser;
+    FILE *f;
     
     seraddr.sin_family =AF_INET;  
     seraddr.sin_port   = htons(8000);
@@ -35,8 +75,14 @@ int main(int argc, char* argv[])
         return 1;
     }
     
+    int temp;
+    if((temp=pthread_create(&ntid,NULL,handle_response,(void*)&ser))!= 0)  
+    {  
+        printf("can't create thread: %s\n",strerror(temp));  
+        return 1;  
+    }  
    
-    strcat(outbuf, "MNG:add child node\n\
+    strcpy(outbuf, "MNG:add child node\n\
                     127.0.0.1 9000 9001\n\
                     127.0.0.1 9002 9003\n\
                     /MNG\n\
@@ -51,39 +97,58 @@ int main(int argc, char* argv[])
                     /TSK\n\
                     TSK:execute ddl\n\
                     CREATE TABLE DH_POI(Id INTEGER, SupplierId  INTEGER,  Name   VARCHAR(320),  TransName  VARCHAR(320));\n\
-                    /TSK\n");
+                    /TSK\n\
+                    TSK:import csv into DH_POI \n\
+                    ");
     
     printf("%s",outbuf);
     send(ser, outbuf, strlen(outbuf),0);
 
-    while(1)
+
+    f = fopen("./test.csv", "r");
+    int  i;
+    char line[1024];
+    
+    i = 0;
+    if(f != NULL)
     {
-        FD_ZERO(&rdfs);
-        FD_SET(0, &rdfs);
-        FD_SET(ser, &rdfs);
-        max_fd = ser;
-        ret = select(max_fd + 1,&rdfs,NULL, NULL, NULL);
-        if(ret < 0)
-        {  
-            printf("select error\n");  
-        }
-        else if(ret == 0)
+        while(!feof(f))
         {
-            printf("time out\n");
+            memset(line, 0, 1024);
+            if(fgets(line, 1024, f) != NULL)
+            {
+                if(i == 0)
+                {
+                    continue; //omit first line;
+                }
+                if(i % 2 == 0)
+                {
+                    sprintf(outbuf, "#100:%s\n", line);
+                }
+                else
+                {
+                    sprintf(outbuf, "#101:%s\n", line);
+                }
+                send(ser, outbuf, strlen(outbuf),0); 
+                i++;
+            }
         }
-        else
+        fclose(f);
+	  }
+    strcpy(outbuf, "/TSK\n\
+                    TSK:execute dql\n\
+                    select count() from DH_POI\n\
+                    /TSK\n\
+                    ");
+    send(ser, outbuf, strlen(outbuf),0);
+    
+    while(gets(line))
+    {
+        sprintf(outbuf, "%s\n", line);
+        if(strcasecmp(line, "quit") == 0)
         {
-            if(FD_ISSET(1, &rdfs))  //from std
-            {
-                fread(outbuf, BUFFER_SIZE, 1, stdin);
-                send(ser, outbuf, strlen(outbuf),0);
-            }
-            else if(FD_ISSET(ser, &rdfs)) //from server
-            {
-                ret = recv(ser,inbuf,BUFFER_SIZE,0);
-                printf("%s", inbuf);
-            }
+            break;
         }
     }
-    close(ret);    
+    close(ser);    
 }

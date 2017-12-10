@@ -12,7 +12,7 @@
 
 #include "./Sqlite/sqlite3.h"
 
-#define DEBUG            1
+#define DEBUG            0
 #define BUFFER_SIZE      1024
 #define MAX_NODE_COUNT   1024
 #define MAX_SERVER_COUNT 128
@@ -67,7 +67,10 @@ struct doom_dh_database
     char     name[128];
 };
 struct doom_dh_database  databases[MAX_DB_COUNT];
+
 struct doom_dh_database  *pcurrentdb = NULL;
+sqlite3_stmt *statement;
+int fieldcount;
 
 char * skip_space(char* str)
 {
@@ -86,6 +89,26 @@ char * back_skip_space(char* end)
     }
     return end + 1;
 };
+
+int split_string(char* buffer, char sperator, char** field)
+{
+    int m = 0;
+    int i = 0, j = 0;
+    
+    field[m] = buffer;
+    m++;
+    while(buffer[i] != '\0')
+    {
+        if(buffer[i] == sperator)
+        {
+            buffer[i] = '\0';
+            field[m] = buffer + i + 1;
+            m++;
+        }
+        i++;
+    }
+    return m;
+}
 
 void add_siblingcommand(struct doom_dh_node* pnode, struct doom_dh_command_list *pcommand)
 {
@@ -129,6 +152,7 @@ struct doom_dh_command_list *get_command(int commandid, struct doom_dh_server **
                 *ppser = pservers[i];
                 return pcommand;
             }
+            pcommand = pcommand->next;
         }
     }
     *ppser = NULL;
@@ -145,8 +169,7 @@ void dump_command_status(struct doom_dh_command_list *pcommand)
     }
 }
 
-
-void execute_ddl_dml(char* buffer, int server)
+int execute_ddl_dml(char* buffer, int server)
 {
     int rc;
     char *errmsg;
@@ -154,20 +177,112 @@ void execute_ddl_dml(char* buffer, int server)
     {
         sprintf(outbuf, "error:please set current database first!\n");
         send(server,outbuf, strlen(outbuf), 0);
-        return;
+        return 0;
     }
     rc = sqlite3_exec(pcurrentdb->db, buffer,NULL,NULL,&errmsg);
     if(rc == SQLITE_OK)
     {
-        sprintf(outbuf, "OK!\n");
-        send(server,outbuf, strlen(outbuf), 0);
+        return 1;
     }
     else
     {
         sprintf(outbuf, "error:%s\n", errmsg);
         send(server,outbuf, strlen(outbuf), 0);
+        return 1;
     }
 };
+
+int init_command(struct doom_dh_command_list *pcommand, int server)
+{
+    int i, n, rc;
+    char sql[512], str[8], *table;
+    table = pcommand->command.name + strlen("import csv into");
+    if(strncasecmp(pcommand->command.name, "import csv into", strlen("import csv into")) == 0)
+    {
+        if(execute_ddl_dml("BEGIN;", server)  == 0)
+        {
+            return 0;
+        }
+        
+        sprintf(sql, "select * from %s;", table);
+        rc = sqlite3_prepare (pcurrentdb->db, sql, -1, &statement, NULL);
+        if(rc != SQLITE_OK)
+        {
+            sprintf(outbuf, "error:prepare error rc = %d!, sql = %s", rc, sql);
+            send(server,outbuf, strlen(outbuf), 0);
+            execute_ddl_dml("ROLLBACK;", server);
+            return 0;
+        }
+        n = sqlite3_column_count(statement);
+        sqlite3_finalize(statement);
+        fieldcount = n;
+        
+        //insert into [table] values (?1,?2,?3,..?n);
+        sprintf(sql, "insert into %s values (", table);
+        for(i = 0; i < n; i++)
+        {
+            if(i < n - 1)
+            {
+                sprintf(str, "?%d,", i + 1);
+            }
+            else
+            {
+                sprintf(str, "?%d);", i + 1);
+            }
+            strcat(sql, str);
+        }
+        rc = sqlite3_prepare (pcurrentdb->db, sql, -1, &statement, NULL);
+        if(rc != SQLITE_OK)
+        {
+            sprintf(outbuf, "error:prepare error rc = %d!, sql = %s", rc, sql);
+            send(server,outbuf, strlen(outbuf), 0);
+            execute_ddl_dml("ROLLBACK;", server);
+            return 0;
+        }
+    }
+    return 1;    
+}
+
+int finalize_command(struct doom_dh_command_list *pcommand, int server)
+{
+    if(strncasecmp(pcommand->command.name, "import csv into", strlen("import csv into")) == 0)
+    {
+        if(execute_ddl_dml("COMMIT;", server)  == 0)
+        {
+            return 1;
+        }
+        sqlite3_finalize(statement);
+        statement = NULL;
+    }
+    return 0;
+}
+
+
+void import_csv(char* buffer, int server)
+{
+    int i, m, n;
+    char *errmsg;
+    char *field[512];
+    
+    
+    n = fieldcount;
+    m = split_string(buffer, ',', field);
+    
+    if(m != n)
+    {
+        sprintf(outbuf, "error: the table has %d field,the line of csv has %d field\n", n, m);
+        send(server,outbuf, strlen(outbuf), 0);
+    }
+    else
+    {
+        for(i = 0; i < n; i++)
+        {
+            sqlite3_bind_text(statement, i + 1, field[i], -1, SQLITE_STATIC);
+        }
+        sqlite3_step(statement);
+        sqlite3_reset(statement);
+    }
+}
 
 void execute_dql(char* buffer, int server)
 {
@@ -187,15 +302,14 @@ void execute_dql(char* buffer, int server)
         send(server,outbuf, strlen(outbuf), 0);
     }
     
-    send(server,outbuf, strlen(outbuf), 0);
     n = sqlite3_column_count(statement);
     while(sqlite3_step(statement) == SQLITE_ROW) 
     {
     	  memset(outbuf, 0, BUFFER_SIZE);
         for(i = 0; i < n; i++)
         {
-            strcat(outbuf, (char *)sqlite3_column_text(statement, 1));
-            if(i < n)
+            strcat(outbuf, (char *)sqlite3_column_text(statement, i));
+            if(i < n - 1)
             {
                 strcat(outbuf, "\t");
             }
@@ -203,8 +317,8 @@ void execute_dql(char* buffer, int server)
             {
                 strcat(outbuf, "\n");
             }
-            send(server,outbuf, strlen(outbuf), 0);
         }
+        send(server,outbuf, strlen(outbuf), 0);
     }
     sqlite3_finalize(statement);
 };
@@ -263,7 +377,10 @@ struct doom_dh_database* create_database(char* buffer, int server)
     if(i < MAX_DB_COUNT)
     {
         strcpy(databases[i].name, name);
-        rc = sqlite3_open(":memory:", &databases[i].db);
+        char dbname[128];
+        sprintf(dbname, "./DoomDH/%d_%s.sq3", nodeid, name);
+        rc = sqlite3_open(dbname, &databases[i].db);
+        //rc = sqlite3_open(":memory:", &databases[i].db);
         if(rc == SQLITE_OK)
         {
             sprintf(outbuf, "Database %s was created!\n", name);
@@ -482,7 +599,7 @@ void handle_server_request(int index)
                 strcpy(pcommand->command.name, skip_space(start + strlen("MNG:")));
 
                 if( strcasecmp(pcommand->command.name, "add sibling node") != 0 && 
-                	  strcasecmp(pcommand->command.name, "get node id") != 0)
+                	  strcasecmp(pcommand->command.name, "get node info") != 0)
                 {
                     printf("error MNG command %s\n", pcommand->command.name);
                     free(pcommand);
@@ -512,7 +629,7 @@ void handle_server_request(int index)
                 	  strcasecmp(pcommand->command.name, "execute ddl")      != 0 &&
                 	  strcasecmp(pcommand->command.name, "execute dml")      != 0 &&
                 	  strcasecmp(pcommand->command.name, "execute dql")      != 0 &&
-                	  strcasecmp(pcommand->command.name, "import csv")      != 0 )
+                	  strncasecmp(pcommand->command.name, "import csv into", strlen("import csv into"))  != 0 ) //import csv into [table]
                 {
                     printf("error TSK command %s\n", pcommand->command.name);
                     free(pcommand);
@@ -521,6 +638,7 @@ void handle_server_request(int index)
                 {
                     pcommand->command.waitinginput = 1;
                     add_command(pservers[index], pcommand);
+                    init_command(pcommand, pservers[index]->socket);
                     
                     sprintf(outbuf, "RES:%s\n", pcommand->command.name);
                     send(pservers[index]->socket,outbuf, strlen(outbuf), 0);
@@ -563,9 +681,9 @@ void handle_server_request(int index)
                 {
                     execute_dql(start, pservers[index]->socket);
                 }
-                else if(strcasecmp(pservers[index]->lastcommand->command.name, "import csv") == 0)	
+                else if(strncasecmp(pservers[index]->lastcommand->command.name, "import csv into", strlen("import csv into")) == 0)	//import csv into [table]
                 {
-                    execute_dql(start, pservers[index]->socket);
+                    import_csv(start, pservers[index]->socket);
                 }
                 else
                 {
@@ -576,6 +694,8 @@ void handle_server_request(int index)
             {
                 sprintf(outbuf, "/RES\n");
                 send(pservers[index]->socket,outbuf, strlen(outbuf), 0);
+                
+                finalize_command(pservers[index]->lastcommand, pservers[index]->socket);
                 pservers[index]->lastcommand->command.waitinginput = 0; //no need to wait for input
                 if(pservers[index]->lastcommand->command.waitingresult == 0)
                 {
