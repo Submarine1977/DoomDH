@@ -313,7 +313,7 @@ void handle_node_response(int index)
      	  pcommand = get_command(pchildnodes[index]->firstcommand->command.parentid, &pcli);
      	  assert(pcommand != NULL);
 
-        if(strcasecmp(start, "/RES") ==  0)
+        if(strncasecmp(start, "/RES", strlen("/RES")) ==  0)
         {   
             //the fisrt command of this node is finished, before removing it, we need handle its parent command
             

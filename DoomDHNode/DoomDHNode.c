@@ -25,11 +25,12 @@ char      outbuf[BUFFER_SIZE];
 int commandid = 1;
 struct doom_dh_command
 {
-    int  id;
-    int  parentid;
-    char name[32];
-    int  waitinginput;
-    int  waitingresult;
+    int     id;
+    int     parentid;
+    char    name[32];
+    int     waitinginput;
+    int     waitingresult;
+    struct  timeval starttime;
 };
 
 struct doom_dh_command_list
@@ -69,8 +70,10 @@ struct doom_dh_database
 struct doom_dh_database  databases[MAX_DB_COUNT];
 
 struct doom_dh_database  *pcurrentdb = NULL;
-sqlite3_stmt *statement;
-int fieldcount;
+
+sqlite3_stmt *import_csv_statement;
+int          import_csv_fieldcount;
+int          import_csv_count;
 
 char * skip_space(char* str)
 {
@@ -199,13 +202,14 @@ int init_command(struct doom_dh_command_list *pcommand, int server)
     table = pcommand->command.name + strlen("import csv into");
     if(strncasecmp(pcommand->command.name, "import csv into", strlen("import csv into")) == 0)
     {
+        import_csv_count = 0;        
         if(execute_ddl_dml("BEGIN;", server)  == 0)
         {
             return 0;
         }
         
         sprintf(sql, "select * from %s;", table);
-        rc = sqlite3_prepare (pcurrentdb->db, sql, -1, &statement, NULL);
+        rc = sqlite3_prepare (pcurrentdb->db, sql, -1, &import_csv_statement, NULL);
         if(rc != SQLITE_OK)
         {
             sprintf(outbuf, "error:prepare error rc = %d!, sql = %s", rc, sql);
@@ -213,9 +217,9 @@ int init_command(struct doom_dh_command_list *pcommand, int server)
             execute_ddl_dml("ROLLBACK;", server);
             return 0;
         }
-        n = sqlite3_column_count(statement);
-        sqlite3_finalize(statement);
-        fieldcount = n;
+        n = sqlite3_column_count(import_csv_statement);
+        sqlite3_finalize(import_csv_statement);
+        import_csv_fieldcount = n;
         
         //insert into [table] values (?1,?2,?3,..?n);
         sprintf(sql, "insert into %s values (", table);
@@ -231,7 +235,7 @@ int init_command(struct doom_dh_command_list *pcommand, int server)
             }
             strcat(sql, str);
         }
-        rc = sqlite3_prepare (pcurrentdb->db, sql, -1, &statement, NULL);
+        rc = sqlite3_prepare (pcurrentdb->db, sql, -1, &import_csv_statement, NULL);
         if(rc != SQLITE_OK)
         {
             sprintf(outbuf, "error:prepare error rc = %d!, sql = %s", rc, sql);
@@ -251,8 +255,8 @@ int finalize_command(struct doom_dh_command_list *pcommand, int server)
         {
             return 1;
         }
-        sqlite3_finalize(statement);
-        statement = NULL;
+        sqlite3_finalize(import_csv_statement);
+        import_csv_statement = NULL;
     }
     return 0;
 }
@@ -265,22 +269,28 @@ void import_csv(char* buffer, int server)
     char *field[512];
     
     
-    n = fieldcount;
+    n = import_csv_fieldcount;
     m = split_string(buffer, ',', field);
     
     if(m != n)
     {
-        sprintf(outbuf, "error: the table has %d field,the line of csv has %d field\n", n, m);
+        sprintf(outbuf, "error: the table has %d field,the line %d of csv has %d field\n", n, import_csv_count, m);
         send(server,outbuf, strlen(outbuf), 0);
     }
     else
     {
         for(i = 0; i < n; i++)
         {
-            sqlite3_bind_text(statement, i + 1, field[i], -1, SQLITE_STATIC);
+            sqlite3_bind_text(import_csv_statement, i + 1, field[i], -1, SQLITE_STATIC);
         }
-        sqlite3_step(statement);
-        sqlite3_reset(statement);
+        sqlite3_step(import_csv_statement);
+        sqlite3_reset(import_csv_statement);
+    }
+    import_csv_count++;
+    if(import_csv_count % 1000 == 0)
+    {
+        execute_ddl_dml("COMMIT;", server);
+        execute_ddl_dml("BEGIN;", server);
     }
 }
 
@@ -377,10 +387,10 @@ struct doom_dh_database* create_database(char* buffer, int server)
     if(i < MAX_DB_COUNT)
     {
         strcpy(databases[i].name, name);
-        char dbname[128];
-        sprintf(dbname, "./DoomDH/%d_%s.sq3", nodeid, name);
-        rc = sqlite3_open(dbname, &databases[i].db);
-        //rc = sqlite3_open(":memory:", &databases[i].db);
+        //char dbname[128];
+        //sprintf(dbname, "/data/users/guozhaozhong/DoomDH/%d_%s.sq3", nodeid, name);
+        //rc = sqlite3_open(dbname, &databases[i].db);
+        rc = sqlite3_open(":memory:", &databases[i].db);
         if(rc == SQLITE_OK)
         {
             sprintf(outbuf, "Database %s was created!\n", name);
@@ -597,6 +607,7 @@ void handle_server_request(int index)
                 pcommand->command.waitingresult = 0;
                 pcommand->prev = pcommand->next = NULL;
                 strcpy(pcommand->command.name, skip_space(start + strlen("MNG:")));
+                gettimeofday(&pcommand->command.starttime, NULL);
 
                 if( strcasecmp(pcommand->command.name, "add sibling node") != 0 && 
                 	  strcasecmp(pcommand->command.name, "get node info") != 0)
@@ -623,6 +634,7 @@ void handle_server_request(int index)
                 pcommand->command.waitingresult = 0;
                 pcommand->prev = pcommand->next = NULL;
                 strcpy(pcommand->command.name, skip_space(start + strlen("TSK:")));
+                gettimeofday(&pcommand->command.starttime, NULL);
                 
                 if( strcasecmp(pcommand->command.name, "create database")  != 0 &&
                 	  strcasecmp(pcommand->command.name, "set database")     != 0 &&
@@ -692,11 +704,16 @@ void handle_server_request(int index)
             }
             else
             {
-                sprintf(outbuf, "/RES\n");
-                send(pservers[index]->socket,outbuf, strlen(outbuf), 0);
-                
                 finalize_command(pservers[index]->lastcommand, pservers[index]->socket);
                 pservers[index]->lastcommand->command.waitinginput = 0; //no need to wait for input
+
+                struct timeval endtime;
+                gettimeofday(&endtime, NULL);
+                sprintf(outbuf, "/RES %s, %ldm%ldus\n", pservers[index]->lastcommand->command.name, 
+                                 endtime.tv_sec - pservers[index]->lastcommand->command.starttime.tv_sec,
+                                 endtime.tv_usec - pservers[index]->lastcommand->command.starttime.tv_usec);
+                send(pservers[index]->socket,outbuf, strlen(outbuf), 0);
+                
                 if(pservers[index]->lastcommand->command.waitingresult == 0)
                 {
                     //remove last command;

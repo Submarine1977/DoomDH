@@ -49,8 +49,11 @@ void *handle_response(void *arg)
         {
             if(FD_ISSET(ser, &rdfs)) //from server
             {
+            	  memset(inbuf, 0, BUFFER_SIZE);
                 ret = recv(ser,inbuf,BUFFER_SIZE,0);
+                printf("\n");
                 printf("%s", inbuf);
+                printf("\n");
             }
         }
     }
@@ -119,6 +122,7 @@ int main(int argc, char* argv[])
             {
                 if(i == 0)
                 {
+                    i++;
                     continue; //omit first line;
                 }
                 if(i % 2 == 0)
@@ -139,12 +143,16 @@ int main(int argc, char* argv[])
                     TSK:execute dql\n\
                     select count() from DH_POI\n\
                     /TSK\n\
+                    TSK:execute dml\n\
+                    create index dh_poi_id on DH_POI(id);\n\
+                    /TSK\n\
                     ");
     send(ser, outbuf, strlen(outbuf),0);
     
     while(gets(line))
     {
         sprintf(outbuf, "%s\n", line);
+        send(ser, outbuf, strlen(outbuf),0);
         if(strcasecmp(line, "quit") == 0)
         {
             break;
