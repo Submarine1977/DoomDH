@@ -11,13 +11,14 @@
 #include<assert.h>
 #include<pthread.h> 
 
+#include "../Command.h"
 
 #define DEBUG            0
 #define BUFFER_SIZE      1024
 
 char      inbuf[BUFFER_SIZE];
+int       inbuflength;
 char      outbuf[BUFFER_SIZE];  
-
 pthread_t ntid; 
 
 
@@ -25,10 +26,12 @@ void *handle_response(void *arg)
 {
     fd_set  rdfs;
     int ser;
-    int ret;
+    int t, ret;
     int max_fd;
     
     ser = *(int*)arg;
+	  memset(inbuf, 0, BUFFER_SIZE);
+    inbuflength = 0;
     while(1)
     {
         FD_ZERO(&rdfs);
@@ -49,11 +52,20 @@ void *handle_response(void *arg)
         {
             if(FD_ISSET(ser, &rdfs)) //from server
             {
-            	  memset(inbuf, 0, BUFFER_SIZE);
-                ret = recv(ser,inbuf,BUFFER_SIZE,0);
-                printf("\n");
-                printf("%s", inbuf);
-                printf("\n");
+                ret = recv(ser,inbuf + inbuflength,BUFFER_SIZE,0);
+                inbuflength += ret;
+                
+                while(inbuflength > 4)
+                {
+                    t = *(short*)(inbuf + 2);
+                    if(t > inbuflength)
+                    {
+                        break;
+                    }
+                    printf("%s", inbuf + 4);
+                    memmove(inbuf, inbuf + t, inbuflength - t);
+                    inbuflength -= t;
+                }
             }
         }
     }
@@ -66,6 +78,9 @@ int main(int argc, char* argv[])
     struct sockaddr_in seraddr;  
     int ser;
     FILE *f;
+    int  i;
+    size_t t;
+    char* line = NULL;
     
     seraddr.sin_family =AF_INET;  
     seraddr.sin_port   = htons(8000);
@@ -85,69 +100,169 @@ int main(int argc, char* argv[])
         return 1;  
     }  
    
-    strcpy(outbuf, "MNG:add child node\n\
-                    127.0.0.1 9000 9001\n\
-                    127.0.0.1 9002 9003\n\
-                    /MNG\n\
-                    MNG:get node info\n\
-                    id\n\
-                    /MNG\n\
-                    TSK:create database\n\
-                    poi\n\
-                    /TSK\n\
-                    TSK:set database\n\
-                    poi\n\
-                    /TSK\n\
-                    TSK:execute ddl\n\
-                    CREATE TABLE DH_POI(Id INTEGER, SupplierId  INTEGER,  Name   VARCHAR(320),  TransName  VARCHAR(320));\n\
-                    /TSK\n\
-                    TSK:import csv into DH_POI \n\
-                    ");
-    
-    printf("%s",outbuf);
-    send(ser, outbuf, strlen(outbuf),0);
+    outbuf[0] = COMMAND_ADDCHILDNODE;
+    outbuf[1] = COMMAND_ACTION_EXESTART;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
 
+    sprintf(outbuf + 4, "127.0.0.1 9000 9001");
+    outbuf[0] = COMMAND_ADDCHILDNODE;
+    outbuf[1] = COMMAND_ACTION_EXEINPUT;
+    *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; //+1 for '\0'
+    send(ser, outbuf, *(short*)(outbuf + 2), 0);
+
+    sprintf(outbuf + 4, "127.0.0.1 9002 9003");
+    outbuf[0] = COMMAND_ADDCHILDNODE;
+    outbuf[1] = COMMAND_ACTION_EXEINPUT;
+    *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; //+1 for '\0'
+    send(ser, outbuf, *(short*)(outbuf + 2), 0);
+    
+    outbuf[0] = COMMAND_ADDCHILDNODE;
+    outbuf[1] = COMMAND_ACTION_EXESTOP;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
+
+
+    outbuf[0] = COMMAND_GETNODEINFO;
+    outbuf[1] = COMMAND_ACTION_EXESTART;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
+
+    sprintf(outbuf + 4, "ID");
+    outbuf[0] = COMMAND_GETNODEINFO;
+    outbuf[1] = COMMAND_ACTION_EXEINPUT;
+    *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; //+1 for '\0'
+    send(ser, outbuf, *(short*)(outbuf + 2), 0);
+
+    outbuf[0] = COMMAND_GETNODEINFO;
+    outbuf[1] = COMMAND_ACTION_EXESTOP;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
+
+    outbuf[0] = COMMAND_CREATEDATABASE;
+    outbuf[1] = COMMAND_ACTION_EXESTART;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
+
+    sprintf(outbuf + 4, "poi");
+    outbuf[0] = COMMAND_CREATEDATABASE;
+    outbuf[1] = COMMAND_ACTION_EXEINPUT;
+    *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; //+1 for '\0'
+    send(ser, outbuf, *(short*)(outbuf + 2), 0);
+
+    outbuf[0] = COMMAND_CREATEDATABASE;
+    outbuf[1] = COMMAND_ACTION_EXESTOP;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
+
+
+    outbuf[0] = COMMAND_SETDATABASE;
+    outbuf[1] = COMMAND_ACTION_EXESTART;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
+
+    sprintf(outbuf + 4, "poi");
+    outbuf[0] = COMMAND_SETDATABASE;
+    outbuf[1] = COMMAND_ACTION_EXEINPUT;
+    *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; //+1 for '\0'
+    send(ser, outbuf, *(short*)(outbuf + 2), 0);
+
+    outbuf[0] = COMMAND_SETDATABASE;
+    outbuf[1] = COMMAND_ACTION_EXESTOP;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
+   
+
+    outbuf[0] = COMMAND_EXECUTEDDL;
+    outbuf[1] = COMMAND_ACTION_EXESTART;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
+
+    sprintf(outbuf + 4, "CREATE TABLE DH_POI(Id INTEGER, SupplierId  INTEGER,  Name   VARCHAR(320),  TransName  VARCHAR(320));");
+    outbuf[0] = COMMAND_EXECUTEDDL;
+    outbuf[1] = COMMAND_ACTION_EXEINPUT;
+    *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; //+1 for '\0'
+    send(ser, outbuf, *(short*)(outbuf + 2), 0);
+
+    outbuf[0] = COMMAND_EXECUTEDDL;
+    outbuf[1] = COMMAND_ACTION_EXESTOP;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
+
+
+    sprintf(outbuf + 4, "DH_POI");
+    outbuf[0] = COMMAND_IMPORTCSV;
+    outbuf[1] = COMMAND_ACTION_EXESTART;
+    *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; //+1 for '\0'
+    send(ser, outbuf, *(short*)(outbuf + 2), 0);
 
     f = fopen("./test.csv", "r");
-    int  i;
-    char line[1024];
     
     i = 0;
+    outbuf[0] = COMMAND_IMPORTCSV;
+    outbuf[1] = COMMAND_ACTION_EXEINPUT_ONE;
+    
     if(f != NULL)
     {
         while(!feof(f))
         {
-            memset(line, 0, 1024);
-            if(fgets(line, 1024, f) != NULL)
+            memset(outbuf + 2, 0, 1022);
+            ret = getline(&line, &t, f);
+            if(i == 0)
             {
-                if(i == 0)
-                {
-                    i++;
-                    continue; //omit first line;
-                }
-                if(i % 2 == 0)
-                {
-                    sprintf(outbuf, "#100:%s\n", line);
-                }
-                else
-                {
-                    sprintf(outbuf, "#101:%s\n", line);
-                }
-                send(ser, outbuf, strlen(outbuf),0); 
+                i++;
+                continue;
+            }
+            if(ret > 0)
+            {
+                *(short*)(outbuf + 2) = ret + 4 + 2 + 1;
+                *(short*)(outbuf + 4) = (i % 2== 0) ? 100 : 101;
+                memcpy(outbuf + 6, line, ret);
+                outbuf[ret+6+1] = '\0';
+                send(ser, outbuf, *(short*)(outbuf + 2),0); 
                 i++;
             }
         }
         fclose(f);
 	  }
-    strcpy(outbuf, "/TSK\n\
-                    TSK:execute dql\n\
-                    select count() from DH_POI\n\
-                    /TSK\n\
-                    TSK:execute dml\n\
-                    create index dh_poi_id on DH_POI(id);\n\
-                    /TSK\n\
-                    ");
-    send(ser, outbuf, strlen(outbuf),0);
+    outbuf[0] = COMMAND_IMPORTCSV;
+    outbuf[1] = COMMAND_ACTION_EXESTOP;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
+	  
+	  
+    outbuf[0] = COMMAND_EXECUTEDQL;
+    outbuf[1] = COMMAND_ACTION_EXESTART;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
+
+    sprintf(outbuf + 4, "select count() from DH_POI;");
+    outbuf[0] = COMMAND_EXECUTEDQL;
+    outbuf[1] = COMMAND_ACTION_EXEINPUT;
+    *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; //+1 for '\0'
+    send(ser, outbuf, *(short*)(outbuf + 2), 0);
+
+    outbuf[0] = COMMAND_EXECUTEDQL;
+    outbuf[1] = COMMAND_ACTION_EXESTOP;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
+
+    outbuf[0] = COMMAND_EXECUTEDML;
+    outbuf[1] = COMMAND_ACTION_EXESTART;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
+
+    sprintf(outbuf + 4, "create index dh_poi_id on DH_POI(id);");
+    outbuf[0] = COMMAND_EXECUTEDML;
+    outbuf[1] = COMMAND_ACTION_EXEINPUT;
+    *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; //+1 for '\0'
+    send(ser, outbuf, *(short*)(outbuf + 2), 0);
+
+    outbuf[0] = COMMAND_EXECUTEDML;
+    outbuf[1] = COMMAND_ACTION_EXESTOP;
+    *(short*)(outbuf + 2) = 4;
+    send(ser, outbuf, 4,0);
+
     
     while(gets(line))
     {
