@@ -14,8 +14,9 @@
 #define COMMAND_ACTION_EXEINPUT         3
 #define COMMAND_ACTION_EXESTOP          4
 #define COMMAND_ACTION_RETSTART         5
-#define COMMAND_ACTION_RETOUTPUT        6
-#define COMMAND_ACTION_RETSTOP          7
+#define COMMAND_ACTION_RETOUT_SERVER    6
+#define COMMAND_ACTION_RETOUT_CLIENT    7
+#define COMMAND_ACTION_RETSTOP          8
 
 struct doom_dh_command
 {

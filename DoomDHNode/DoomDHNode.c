@@ -13,15 +13,15 @@
 #include "./Sqlite/sqlite3.h"
 #include "../Command.h"
 
-#define DEBUG            1
-#define BUFFER_SIZE      1024
+#define DEBUG            0
+#define BUFFER_SIZE      65536
 #define MAX_NODE_COUNT   1024
 #define MAX_SERVER_COUNT 128
 #define MAX_DB_COUNT     128
                               
-int       nodeid;                                   
-char      inbuf[BUFFER_SIZE];
-char      outbuf[BUFFER_SIZE];  
+int      nodeid;                                   
+char     outbuf[BUFFER_SIZE];  
+char     debuglogfile[128];
 
 int commandno = 1;
 
@@ -49,13 +49,15 @@ struct doom_dh_server
 };
 struct    doom_dh_server*  pservers[MAX_SERVER_COUNT];
 
-void dumpbuffer(char *buffer, int length)
+void dumpbuffer(FILE *f, char *buffer, int length)
 {
     int i;
+    char str[16];
     for(i = 0; i < length; i++)
     {
-        printf("%02x ", buffer[i]);
-        if((i + 1) % 16 == 0)
+        sprintf(str, "%02x", buffer[i]);
+        fprintf(f, "%s ", str + strlen(str) - 2);
+        if((i + 1) % 32 == 0)
         {
             printf("\n");
         }
@@ -77,14 +79,31 @@ sqlite3_stmt *import_csv_statement;
 int          import_csv_fieldcount;
 int          import_csv_count;
 
-int split_string(char* buffer, char sperator, char** field)
+int split_string(char* buffer, char sperator, char** field, int *pos)
 {
     int m = 0;
-    int i = 0, j = 0;
+    int i = *pos;
     
-    field[m] = buffer;
-    m++;
+    //skip /r /n;
     while(buffer[i] != '\0')
+    {
+        if(buffer[i] == '\r' || buffer[i] == '\n')
+        {
+            i++;
+        }
+        else
+        {
+            break;
+        }
+    }
+    if(buffer[i] == '\0')
+    {
+        return 0;
+    }
+    
+    field[m] = buffer + i;
+    m++;
+    while(buffer[i] != '\0' && buffer[i] != '\r' && buffer[i] != '\n')
     {
         if(buffer[i] == sperator)
         {
@@ -94,6 +113,13 @@ int split_string(char* buffer, char sperator, char** field)
         }
         i++;
     }
+    
+    if(buffer[i] == '\r' || buffer[i] == '\n')
+    {
+        buffer[i] = '\0';
+    }
+    *pos = i + 1;
+    
     return m;
 }
 
@@ -154,7 +180,7 @@ int execute_ddl(char* buffer, int server)
     {
         sprintf(outbuf + 4, "error:please set current database first!\n");
         outbuf[0]              = COMMAND_EXECUTEDDL;
-        outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+        outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
         *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
         send(server,outbuf, *(short*)(outbuf + 2), 0);
         return 0;
@@ -168,7 +194,7 @@ int execute_ddl(char* buffer, int server)
     {
         sprintf(outbuf + 4, "error:%s\n", errmsg);
         outbuf[0]              = COMMAND_EXECUTEDDL;
-        outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+        outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
         *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
         send(server,outbuf, *(short*)(outbuf + 2), 0);
         return 1;
@@ -183,7 +209,7 @@ int execute_dml(char* buffer, int server)
     {
         sprintf(outbuf + 4, "error:please set current database first!\n");
         outbuf[0]              = COMMAND_EXECUTEDML;
-        outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+        outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
         *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
         send(server,outbuf, *(short*)(outbuf + 2), 0);
         return 0;
@@ -197,7 +223,7 @@ int execute_dml(char* buffer, int server)
     {
         sprintf(outbuf + 4, "error:%s\n", errmsg);
         outbuf[0]              = COMMAND_EXECUTEDML;
-        outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+        outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
         *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
         send(server,outbuf, *(short*)(outbuf + 2), 0);
         return 1;
@@ -223,7 +249,7 @@ int init_command(struct doom_dh_command_node *pcommand, char* param, int server)
         {
             sprintf(outbuf + 4, "error:prepare error rc = %d!, sql = %s\n", rc, sql);
             outbuf[0]              = COMMAND_IMPORTCSV;
-            outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+            outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
             *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
             send(server,outbuf, *(short*)(outbuf + 2), 0);
             execute_dml("ROLLBACK;", server);
@@ -252,7 +278,7 @@ int init_command(struct doom_dh_command_node *pcommand, char* param, int server)
         {
             sprintf(outbuf + 4, "error:prepare error rc = %d!, sql = %s", rc, sql);
             outbuf[0]              = COMMAND_IMPORTCSV;
-            outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+            outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
             *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
             send(server,outbuf, *(short*)(outbuf + 2), 0);
             execute_dml("ROLLBACK;", server);
@@ -279,36 +305,36 @@ int finalize_command(struct doom_dh_command_node *pcommand, int server)
 
 void import_csv(char* buffer, int server)
 {
-    int i, m, n;
+    int i, m, n, pos;
     char *errmsg;
     char *field[512];
-    
-    
     n = import_csv_fieldcount;
-    m = split_string(buffer, ',', field);
-    
-    if(m != n)
+    pos = 0;
+    while( (m = split_string(buffer, ',', field, &pos)) > 0)
     {
-        sprintf(outbuf + 4, "error: the table has %d field,the line %d of csv has %d field\n", n, import_csv_count, m);
-        outbuf[0]              = COMMAND_IMPORTCSV;
-        outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
-        *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
-        send(server,outbuf, *(short*)(outbuf + 2), 0);
-    }
-    else
-    {
-        for(i = 0; i < n; i++)
+        if(m != n)
         {
-            sqlite3_bind_text(import_csv_statement, i + 1, field[i], -1, SQLITE_STATIC);
+            sprintf(outbuf + 4, "error: the table has %d field,the line %d of csv has %d field, filed[0] = %s\n", n, import_csv_count, m, field[0]);
+            outbuf[0]              = COMMAND_IMPORTCSV;
+            outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
+            *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
+            send(server,outbuf, *(short*)(outbuf + 2), 0);
         }
-        sqlite3_step(import_csv_statement);
-        sqlite3_reset(import_csv_statement);
-    }
-    import_csv_count++;
-    if(import_csv_count % 1000 == 0)
-    {
-        execute_dml("COMMIT;", server);
-        execute_dml("BEGIN;", server);
+        else
+        {
+            for(i = 0; i < n; i++)
+            {
+                sqlite3_bind_text(import_csv_statement, i + 1, field[i], -1, SQLITE_STATIC);
+            }
+            sqlite3_step(import_csv_statement);
+            sqlite3_reset(import_csv_statement);
+        }
+        import_csv_count++;
+        if(import_csv_count % 1000 == 0)
+        {
+            execute_dml("COMMIT;", server);
+            execute_dml("BEGIN;", server);
+        }
     }
 }
 
@@ -321,7 +347,7 @@ void execute_dql(char* buffer, int server)
     {
         sprintf(outbuf + 4, "error:please set current database first!\n");
         outbuf[0]              = COMMAND_EXECUTEDQL;
-        outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+        outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
         *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
         send(server,outbuf, *(short*)(outbuf + 2), 0);
         return;
@@ -331,7 +357,7 @@ void execute_dql(char* buffer, int server)
     {
         sprintf(outbuf + 4, "error:prepare error rc = %d!", rc);
         outbuf[0]              = COMMAND_EXECUTEDQL;
-        outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+        outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
         *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
         send(server,outbuf, *(short*)(outbuf + 2), 0);
     }
@@ -342,7 +368,7 @@ void execute_dql(char* buffer, int server)
     	  memset(outbuf, 0, BUFFER_SIZE);
         for(i = 0; i < n; i++)
         {
-            strcat(outbuf, (char *)sqlite3_column_text(statement, i));
+            strcat(outbuf + 4, (char *)sqlite3_column_text(statement, i));
             if(i < n - 1)
             {
                 strcat(outbuf, "\t");
@@ -352,7 +378,10 @@ void execute_dql(char* buffer, int server)
                 strcat(outbuf, "\n");
             }
         }
-        send(server,outbuf, strlen(outbuf), 0);
+        outbuf[0]              = COMMAND_EXECUTEDQL;
+        outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
+        *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
+        send(server,outbuf, *(short*)(outbuf + 2), 0);
     }
     sqlite3_finalize(statement);
 };
@@ -377,7 +406,7 @@ struct doom_dh_database* set_database(char* buffer, int server)
         {
             sprintf(outbuf + 4, "Database %s was set as current database!\n", name);
             outbuf[0]              = COMMAND_SETDATABASE;
-            outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+            outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
             *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
             send(server,outbuf, *(short*)(outbuf + 2), 0);
             pcurrentdb = &databases[i];
@@ -386,7 +415,7 @@ struct doom_dh_database* set_database(char* buffer, int server)
     }
     sprintf(outbuf + 4, "error:could not find the databases %s\n", name);
     outbuf[0]              = COMMAND_SETDATABASE;
-    outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+    outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
     *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
     send(server,outbuf, *(short*)(outbuf + 2), 0);
     return NULL;
@@ -424,9 +453,8 @@ struct doom_dh_database* create_database(char* buffer, int server)
         if(rc == SQLITE_OK)
         {
             sprintf(outbuf + 4, "Database %s was created!\n", name);
-            send(server,outbuf, strlen(outbuf), 0);
             outbuf[0]              = COMMAND_CREATEDATABASE;
-            outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+            outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
             *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
             send(server,outbuf, *(short*)(outbuf + 2), 0);
             return &databases[i];
@@ -435,7 +463,7 @@ struct doom_dh_database* create_database(char* buffer, int server)
         {
             sprintf(outbuf + 4, "error:Failed to open database %s\n", sqlite3_errmsg(databases[i].db));
             outbuf[0]              = COMMAND_CREATEDATABASE;
-            outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+            outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
             *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
             send(server,outbuf, *(short*)(outbuf + 2), 0);
             databases[i].db = NULL;
@@ -447,7 +475,7 @@ struct doom_dh_database* create_database(char* buffer, int server)
     {
         sprintf(outbuf + 4, "error:Failed to create database, too many databases\n");
         outbuf[0]              = COMMAND_CREATEDATABASE;
-        outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+        outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
         *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
         send(server,outbuf, *(short*)(outbuf + 2), 0);
         send(server,outbuf, strlen(outbuf), 0);
@@ -473,14 +501,14 @@ void get_node_info(char* buffer, int server)
     {
         sprintf(outbuf + 4, "ID:%d\n", nodeid);
         outbuf[0]              = COMMAND_GETNODEINFO;
-        outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+        outbuf[1]              = COMMAND_ACTION_RETOUT_SERVER;
         *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
         send(server,outbuf, *(short*)(outbuf + 2), 0);
         return;
     }
     sprintf(outbuf + 4, "error:do not have the %s infomation\n", name);
     outbuf[0]              = COMMAND_GETNODEINFO;
-    outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+    outbuf[1]              = COMMAND_ACTION_RETOUT_SERVER;
     *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
     send(server,outbuf, *(short*)(outbuf + 2), 0);
 }
@@ -500,7 +528,7 @@ struct doom_dh_node* add_sibling_node(char* buffer, int server)
         {
             sprintf(outbuf + 4, "error:Wrong sibling node format%s\n", buffer);
             outbuf[0]              = COMMAND_ADDSIBLINGNODE;
-            outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+            outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
             *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
             send(server,outbuf, *(short*)(outbuf + 2), 0);
             return NULL;
@@ -512,7 +540,9 @@ struct doom_dh_node* add_sibling_node(char* buffer, int server)
 
     if(DEBUG)
     {
-        printf("add_sibling_node %s %s\n", ip, port);
+        FILE *f = fopen(debuglogfile, "a+");
+        fprintf(f,"add_sibling_node %s %s\n", ip, port);
+        fclose(f);
     }     
     
     for(j = 0; j < MAX_NODE_COUNT; j++)
@@ -530,7 +560,7 @@ struct doom_dh_node* add_sibling_node(char* buffer, int server)
     {
         sprintf(outbuf + 4, "error:Failed to add sibling node %s %s, node was already connected, or port was already used\n", ip, port);
         outbuf[0]              = COMMAND_ADDSIBLINGNODE;
-        outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+        outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
         *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
         send(server,outbuf, *(short*)(outbuf + 2), 0);
         return NULL;
@@ -565,16 +595,16 @@ struct doom_dh_node* add_sibling_node(char* buffer, int server)
             psiblingnodes[j] = NULL;
             sprintf(outbuf + 4, "error: Failed to add sibling node, %s:%s, errno=%d\n", ip, port, errno);
             outbuf[0]              = COMMAND_ADDSIBLINGNODE;
-            outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+            outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
             *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
             send(server,outbuf, *(short*)(outbuf + 2), 0);
             return NULL;
         }
         else
         {
-            sprintf(outbuf + 4, "New sibling node added, %s:%s\n", ip, port);
+            sprintf(outbuf + 4, "info:New sibling node added, %s:%s\n", ip, port);
             outbuf[0]              = COMMAND_ADDSIBLINGNODE;
-            outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+            outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
             *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
             send(server,outbuf, *(short*)(outbuf + 2), 0);
             return psiblingnodes[j];
@@ -584,7 +614,7 @@ struct doom_dh_node* add_sibling_node(char* buffer, int server)
     {
         sprintf(outbuf + 4, "error:Failed to add sibling node, too many nodes\n");
         outbuf[0]              = COMMAND_ADDSIBLINGNODE;
-        outbuf[1]              = COMMAND_ACTION_RETOUTPUT;
+        outbuf[1]              = COMMAND_ACTION_RETOUT_CLIENT;
         *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; // + 1 for '\0'
         send(server,outbuf, *(short*)(outbuf + 2), 0);
         return NULL;
@@ -598,26 +628,29 @@ void handle_server_request(int index)
     char *start;
     struct doom_dh_command_node *pcommand, *pchildcommand;    
     
-    ret = recv(pservers[index]->socket,inbuf,BUFFER_SIZE,0);
+    ret = recv(pservers[index]->socket, pservers[index]->buffer + pservers[index]->bufferlength, BUFFER_SIZE - pservers[index]->bufferlength, 0);
     if(ret == 0)
     {   
         close(pservers[index]->socket);
         printf("Server connection %s:%d closed!\n", pservers[index]->ip, pservers[index]->port);
         free(pservers[index]);
         pservers[index] = NULL;
+        return;
     }
     else if(ret < 0)
     {
         printf("error recieve data, errno = %d\n", errno);
+        return;
     }
     //ret > 0
+    pservers[index]->bufferlength += ret;
     if(DEBUG)
     {
-        printf("handle_client_request inbuf = \n");
-        dumpbuffer(inbuf, ret);
+        FILE *f = fopen(debuglogfile, "a+");
+        fprintf(f, "handle_client_request[%d] buffer = \n", index);
+        dumpbuffer(f, pservers[index]->buffer, pservers[index]->bufferlength);
+        fclose(f);
     }
-    memcpy(pservers[index]->buffer + pservers[index]->bufferlength, inbuf, ret);
-    pservers[index]->bufferlength += ret;
 
     if( pservers[index]->buffer[0] == COMMAND_QUIT)
     {
@@ -639,19 +672,16 @@ void handle_server_request(int index)
 
         if(DEBUG)
         {
-            printf("handle_server_request: server index = %d, start = \n", index);
-            dumpbuffer(start, *(short*)(start + 2));
+            FILE *f = fopen(debuglogfile, "a+");
+            fprintf(f, "handle_server_request: server index = %d, start = \n", index);
+            dumpbuffer(f, start, *(short*)(start + 2));
             dump_command_status(pservers[index]->firstcommand);
+            fclose(f);
         }
 
         if(pservers[index]->lastcommand == NULL || //no command
         	 pservers[index]->lastcommand->command.waitinginput == 0) //finish input for last command
         {
-            if(DEBUG)
-            {
-                printf("handle_server_request handle input start = \n");
-                dumpbuffer(start, *(short*)(start + 2));
-            }
             if(start[1] == COMMAND_ACTION_EXESTART)
             {
                 //create a new command
@@ -691,7 +721,7 @@ void handle_server_request(int index)
             }
             else
             {
-                printf("error command action %d\n", start[1]);
+                printf("the server is waiting for starting a command, but the input command action is %d\n", start[1]);
             }
         }
         else if(pservers[index]->lastcommand != NULL && pservers[index]->lastcommand->command.waitinginput == 1) //waiting for input
@@ -741,8 +771,7 @@ void handle_server_request(int index)
                 }
                 else
                 {
-                    printf("error request command=%d, start = \n", pservers[index]->lastcommand->command.id);
-                    dumpbuffer(start, *(short*)(start + 2));
+                    printf("error request command=%d\n", pservers[index]->lastcommand->command.id);
                 }
             }
             else
@@ -820,6 +849,8 @@ int main(int argc, char* argv[])
     nodeid   = atoi(argv[1]);
     serverport = atoi(argv[3]);
     nodeport   = atoi(argv[4]);
+    
+    sprintf(debuglogfile, "debug_%d.log", nodeid);
 
     socklen_t clilen        = sizeof(cliaddr);  
  
@@ -953,7 +984,6 @@ int main(int argc, char* argv[])
         }
         else
         {
-            memset(inbuf,0,BUFFER_SIZE);
             memset(outbuf, 0, BUFFER_SIZE);
             if(FD_ISSET(ser, &rdfs))  
             {  
