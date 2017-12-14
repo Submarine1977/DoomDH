@@ -14,12 +14,14 @@
 #include "../Command.h"
 
 #define DEBUG            0
-#define BUFFER_SIZE      32760
+//#define BUFFER_SIZE      32760
+#define BUFFER_SIZE      2048
 
 char      inbuf[BUFFER_SIZE];
 int       inbuflength;
 char      outbuf[BUFFER_SIZE];  
 pthread_t ntid; 
+int       nodeadded;
 
 int split_string(char* buffer, char sperator, char** field, int *pos)
 {
@@ -59,8 +61,12 @@ int split_string(char* buffer, char sperator, char** field, int *pos)
     if(buffer[i] == '\r' || buffer[i] == '\n')
     {
         buffer[i] = '\0';
+        *pos = i + 1;
     }
-    *pos = i + 1;
+    else //buffer[i] = '\0'
+    {
+        *pos = i;
+    }
     
     return m;
 }
@@ -70,8 +76,10 @@ void test_split()
     FILE *f;
     int i, m, n, pos, ret;
     f = fopen("./test.csv", "r");
-    ret = fread(outbuf, 1, BUFFER_SIZE, f);
+    ret = fread(outbuf, 1, 2019, f);
     outbuf[ret] = '\0';
+    outbuf[ret+1] = 9;
+    outbuf[ret+2] = 4;
 
     char *field[100];
     pos = 0;
@@ -86,7 +94,7 @@ void test_split()
             printf("Field[%d]=%s\n", i, field[i]);
         }
     }
-    
+    fclose(f);
     
 }
 
@@ -130,7 +138,11 @@ void *handle_response(void *arg)
                     {
                         break;
                     }
-                    printf("%d,%d: %s", inbuf[0], inbuf[1], inbuf + 4);
+                    printf("%d,%d: %s\n", inbuf[0], inbuf[1], inbuf + 4);
+                    if(inbuf[0] == COMMAND_ADDCHILDNODE && inbuf[1] == COMMAND_ACTION_RETSTOP)
+                    {
+                        nodeadded = 1;
+                    }
                     memmove(inbuf, inbuf + t, inbuflength - t);
                     inbuflength -= t;
                 }
@@ -152,6 +164,8 @@ int main(int argc, char* argv[])
     
     //test_split();
     //return;
+   
+    nodeadded = 0;
     
     seraddr.sin_family =AF_INET;  
     seraddr.sin_port   = htons(8000);
@@ -187,14 +201,23 @@ int main(int argc, char* argv[])
     outbuf[1] = COMMAND_ACTION_EXEINPUT;
     *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; //+1 for '\0'
     send(ser, outbuf, *(short*)(outbuf + 2), 0);
-    
-    sleep(5); //wait for add node finishing
-    printf("TTTTTTTTTTTTTTTTTTTTTTT\n");
+
+    sprintf(outbuf + 4, "127.0.0.1 9004 9005");
+    outbuf[0] = COMMAND_ADDCHILDNODE;
+    outbuf[1] = COMMAND_ACTION_EXEINPUT;
+    *(short*)(outbuf + 2) = strlen(outbuf + 4) + 4 + 1; //+1 for '\0'
+    send(ser, outbuf, *(short*)(outbuf + 2), 0);
     
     outbuf[0] = COMMAND_ADDCHILDNODE;
     outbuf[1] = COMMAND_ACTION_EXESTOP;
     *(short*)(outbuf + 2) = 4;
     send(ser, outbuf, 4,0);
+
+    while(!nodeadded)
+    {
+        usleep(1000);
+    }
+    printf("======================================\n");
 
     outbuf[0] = COMMAND_CREATEDATABASE;
     outbuf[1] = COMMAND_ACTION_EXESTART;
@@ -287,10 +310,8 @@ int main(int argc, char* argv[])
             }
             
             *(short*)(outbuf + 2) = ret + 4 + 2 + 1;
-            *(short*)(outbuf + 4) = (j % 2== 0) ? 100 : 101;
+            *(short*)(outbuf + 4) = 100 + (j % 3);
             send(ser, outbuf, *(short*)(outbuf + 2),0); 
-            
-            //printf("j = %d, outbuf = \n%s\n", j, outbuf + 6);
             
             if(readlen == flen)
             {
@@ -298,7 +319,14 @@ int main(int argc, char* argv[])
             }
             fseek(f, -i,SEEK_CUR);
             readlen -= i;
+
+            //printf("j = %d, readlen = %d, ret = %d, outbuf = \n%s\n", j, readlen, ret, outbuf + 6);
+
             j++;
+            //if(j >= 3)
+            //{
+            //    break;
+            //}
         }
         fclose(f);
 	  }

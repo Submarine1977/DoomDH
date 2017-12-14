@@ -33,13 +33,3 @@ struct doom_dh_command_node
     struct doom_dh_command command;
     struct doom_dh_command_node *prev, *next;
 };
-
-void dump_command_status(struct doom_dh_command_node *pcommand)
-{
-    while(pcommand != NULL)
-    {
-        printf("Command %d: no=%d,parentno=%d, waitinginput=%d, waitingresult=%d\n", 
-                pcommand->command.id, pcommand->command.no, pcommand->command.parentno, pcommand->command.waitinginput, pcommand->command.waitingresult);
-        pcommand = pcommand->next;
-    }
-};
