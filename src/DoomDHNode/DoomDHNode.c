@@ -10,7 +10,7 @@
 #include<errno.h>
 #include<assert.h>
 
-#include "./Sqlite/sqlite3.h"
+#include "../Sqlite/sqlite3.h"
 #include "../Command.h"
 
 #define DEBUG            0
@@ -200,6 +200,36 @@ int split_string(char* buffer, char sperator, char** field, int *pos)
     return m;
 }
 
+int decodehexchar(char c)
+{
+    if(c >= '0' && c <= '9')
+    {
+        return c - '0';
+    }
+    else if(c >= 'a' && c <= 'f')
+    {
+        return c - 'a' + 10;
+    }
+    else if(c >= 'A' && c <= 'F')
+    {
+        return c - 'A' + 10;
+    }
+    assert(0);
+    return 0;
+}
+int decodehexstring(char * buffer)
+{
+    int i;
+    i = 0;
+    while(buffer[2*i] != 0 && buffer[2*i + 1] != 0)
+    {
+        buffer[i] = (decodehexchar(buffer[2*i]) << 4) + decodehexchar(buffer[2*i + 1]);
+        i++;
+    }
+    buffer[i] = '\0';
+    return i;
+}
+
 void add_siblingcommand(struct doom_dh_node* pnode, struct doom_dh_command_node *pcommand)
 {
     if(pnode->firstcommand == NULL)
@@ -296,7 +326,8 @@ int init_command(struct doom_dh_command_node *pcommand, char* param, int server)
     int i, n, rc;
     char sql[512], str[8], *table;
     table = param;
-    if(pcommand->command.id == COMMAND_IMPORTCSV)
+    if( pcommand->command.id == COMMAND_IMPORTCSV ||
+    	  pcommand->command.id == COMMAND_IMPORTCSX)
     {
         import_csv_count = 0;        
         if(execute_dml("BEGIN;", server)  == 0)
@@ -308,7 +339,7 @@ int init_command(struct doom_dh_command_node *pcommand, char* param, int server)
         rc = sqlite3_prepare (pcurrentdb->db, sql, -1, &import_csv_statement, NULL);
         if(rc != SQLITE_OK)
         {
-            send_info( server, COMMAND_IMPORTCSV, COMMAND_ACTION_RETOUT_CLIENT, "error:prepare error rc = %d!, sql = %s", rc, sql);
+            send_info( server, pcommand->command.id, COMMAND_ACTION_RETOUT_CLIENT, "error:prepare error rc = %d!, sql = %s", rc, sql);
             execute_dml("ROLLBACK;", server);
             return 0;
         }
@@ -333,7 +364,7 @@ int init_command(struct doom_dh_command_node *pcommand, char* param, int server)
         rc = sqlite3_prepare (pcurrentdb->db, sql, -1, &import_csv_statement, NULL);
         if(rc != SQLITE_OK)
         {
-            send_info( server, COMMAND_IMPORTCSV, COMMAND_ACTION_RETOUT_CLIENT, "error:prepare error rc = %d!, sql = %s", rc, sql);
+            send_info( server, pcommand->command.id, COMMAND_ACTION_RETOUT_CLIENT, "error:prepare error rc = %d!, sql = %s", rc, sql);
             execute_dml("ROLLBACK;", server);
             return 0;
         }
@@ -343,7 +374,8 @@ int init_command(struct doom_dh_command_node *pcommand, char* param, int server)
 
 int finalize_command(struct doom_dh_command_node *pcommand, int server)
 {
-    if(pcommand->command.id == COMMAND_IMPORTCSV)
+    if(pcommand->command.id == COMMAND_IMPORTCSV ||
+    	 pcommand->command.id == COMMAND_IMPORTCSX)
     {
         if(execute_dml("COMMIT;", server)  == 0)
         {
@@ -355,8 +387,9 @@ int finalize_command(struct doom_dh_command_node *pcommand, int server)
     return 0;
 }
 
-
-void import_csv(char* buffer, int server)
+//flag 0: normal csv
+//flag 1: Hex csv
+void import_csv(char* buffer, int server, int flag)
 {
     int i, m, n, pos;
     char *errmsg;
@@ -377,6 +410,10 @@ void import_csv(char* buffer, int server)
         {
             for(i = 0; i < n; i++)
             {
+                if(flag == 1)
+                {
+                    decodehexstring(field[i]);
+                }
                 sqlite3_bind_text(import_csv_statement, i + 1, field[i], -1, SQLITE_STATIC);
             }
             sqlite3_step(import_csv_statement);
@@ -688,7 +725,8 @@ void handle_server_request(int index)
                 	  pcommand->command.id == COMMAND_EXECUTEDDL      ||
                 	  pcommand->command.id == COMMAND_EXECUTEDML      ||
                 	  pcommand->command.id == COMMAND_EXECUTEDQL      ||
-                	  pcommand->command.id == COMMAND_IMPORTCSV
+                	  pcommand->command.id == COMMAND_IMPORTCSV       ||
+                	  pcommand->command.id == COMMAND_IMPORTCSX
                 	  )
                 {
                     pcommand->command.waitinginput = 1;
@@ -751,7 +789,11 @@ void handle_server_request(int index)
                 }
                 else if(pservers[index]->lastcommand->command.id == COMMAND_IMPORTCSV)	//import csv into [table]
                 {
-                    import_csv(start + offset, pservers[index]->socket);
+                    import_csv(start + offset, pservers[index]->socket, 0);
+                }
+                else if(pservers[index]->lastcommand->command.id == COMMAND_IMPORTCSX)
+                {
+                    import_csv(start + offset, pservers[index]->socket, 1);
                 }
                 else
                 {

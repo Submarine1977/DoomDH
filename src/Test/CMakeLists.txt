@@ -1,0 +1,2 @@
+ADD_EXECUTABLE(test Test.c)
+TARGET_LINK_LIBRARIES(test pthread)

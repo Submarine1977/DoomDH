@@ -510,7 +510,8 @@ void handle_client_request(int index)
                          pcommand->command.id ==  COMMAND_EXECUTEDDL ||
                 	       pcommand->command.id ==  COMMAND_EXECUTEDML ||
                 	       pcommand->command.id ==  COMMAND_EXECUTEDQL ||
-                	       pcommand->command.id ==  COMMAND_IMPORTCSV //import csv into [table]
+                	       pcommand->command.id ==  COMMAND_IMPORTCSV  ||//import csv into [table]
+                	       pcommand->command.id ==  COMMAND_IMPORTCSX
                 	      )
                 {
                     pcommand->command.waitinginput = 1;
@@ -622,7 +623,8 @@ void handle_client_request(int index)
                      pclients[index]->lastcommand->command.id == COMMAND_EXECUTEDDL ||
                 	   pclients[index]->lastcommand->command.id == COMMAND_EXECUTEDML ||
                 	   pclients[index]->lastcommand->command.id == COMMAND_EXECUTEDQL ||
-                	   pclients[index]->lastcommand->command.id == COMMAND_IMPORTCSV //import csv into [table]
+                	   pclients[index]->lastcommand->command.id == COMMAND_IMPORTCSV  ||//import csv into [table]
+                	   pclients[index]->lastcommand->command.id == COMMAND_IMPORTCSX
                 	   )
             {
                 if(start[1]== COMMAND_ACTION_EXESTOP)
