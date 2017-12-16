@@ -10,10 +10,12 @@
 #include<errno.h>
 #include<assert.h>
 #include <stdarg.h>
+#include <time.h>
+#include <sys/time.h>
 
 #include "../Command.h"
 
-#define DEBUG            0
+#define DEBUG            1
 #define BUFFER_SIZE      65536
 #define MAX_NODE_COUNT   1024
 #define MAX_CLIENT_COUNT 128
@@ -73,16 +75,44 @@ int send_info(int socket, char command, char action, char* fmt, ...)
 
 int debug_info(char *fmt, ... )
 {
+    time_t timep; 
     int     n;
     va_list args;
     FILE *f;
-    f = fopen("debug.log", "a+");
+
+    f = fopen("debug.txt", "a+");
+
+    time (&timep); 
+    fprintf(f, "[%s]",ctime(&timep));
+    
     va_start(args, fmt);
     n = vfprintf(f, fmt, args);
     va_end(args);
+
     fclose(f);
     return n;    
 }
+
+int log_info(char *fmt, ... )
+{
+    time_t timep; 
+    int     n;
+    va_list args;
+    FILE *f;
+
+    f = fopen("log.txt", "a+");
+
+    time (&timep); 
+    fprintf(f, "[%s]",ctime(&timep));
+
+    va_start(args, fmt);
+    n = vfprintf(f, fmt, args);
+    va_end(args);
+
+    fclose(f);
+    return n;    
+}
+
 
 void dumpbuffer(char *buffer, int length)
 {
@@ -289,13 +319,13 @@ void handle_node_response(int index)
     if(ret == 0)
     {   
         close(pchildnodes[index]->socket);
-        printf("Node connection %s:%d closed!\n", pchildnodes[index]->ip, pchildnodes[index]->serverport);
+        log_info("Node connection %s:%d closed!\n", pchildnodes[index]->ip, pchildnodes[index]->serverport);
         free(pchildnodes[index]);
         pchildnodes[index] = NULL;
     }
     else if(ret < 0)
     {
-        printf("error recieve data, errno = %d\n", errno);
+        log_info("error recieve data, errno = %d\n", errno);
     }
     //ret > 0
     pchildnodes[index]->bufferlength += ret;
@@ -307,7 +337,7 @@ void handle_node_response(int index)
     if(	pchildnodes[index]->buffer[0] == COMMAND_QUIT )
 	  {
         close(pchildnodes[index]->socket);
-        printf("Connection %s:%d closed!\n", pchildnodes[index]->ip, pchildnodes[index]->serverport);
+        log_info("Connection %s:%d closed!\n", pchildnodes[index]->ip, pchildnodes[index]->serverport);
         free(pchildnodes[index]);
         pchildnodes[index] = NULL;
     }
@@ -393,14 +423,14 @@ void handle_node_response(int index)
         {
             send_info( pcli->socket, start[0], start[1], "(%s:%d)%s", 
                        pchildnodes[index]->ip, pchildnodes[index]->serverport, start + 4);
-        }
-        else if(start[1] == COMMAND_ACTION_RETOUT_SERVER)
-        {
             if(pchildnodes[index]->firstcommand->command.id == COMMAND_GETNODEINFO &&
         	       strncasecmp(start + 4, "ID:", strlen("ID:")) == 0 )
             {
                 pchildnodes[index]->id = atoi(start + 4 + strlen("ID:"));
             }
+        }
+        else if(start[1] == COMMAND_ACTION_RETOUT_SERVER)
+        {
         }
         
         i += *(short*)(start + 2);
@@ -423,14 +453,14 @@ void handle_client_request(int index)
     if(ret == 0)
     {   
         close(pclients[index]->socket);
-        printf("Client connection %s:%d closed!\n", pclients[index]->ip, pclients[index]->port);
+        log_info("Client connection %s:%d closed!\n", pclients[index]->ip, pclients[index]->port);
         free(pclients[index]);
         pclients[index] = NULL;
         return;
     }
     else if(ret < 0)
     {
-        printf("error recieve data, errno = %d\n", errno);
+        log_info("error recieve data, errno = %d\n", errno);
         return;
     }
     //ret > 0
@@ -444,7 +474,7 @@ void handle_client_request(int index)
     if( pclients[index]->buffer[0] == COMMAND_QUIT)
     {
         close(pclients[index]->socket);
-        printf("Connection %s:%d closed!\n", pclients[index]->ip, pclients[index]->port);
+        log_info("Connection %s:%d closed!\n", pclients[index]->ip, pclients[index]->port);
         free(pclients[index]);
         pclients[index] = NULL;
     }
@@ -504,14 +534,15 @@ void handle_client_request(int index)
                     }
                     add_command(pclients[index], pcommand);
                 }
-                else if(pcommand->command.id == COMMAND_GETNODEINFO||
+                else if(pcommand->command.id == COMMAND_GETNODEINFO    ||
                 	       pcommand->command.id == COMMAND_CREATEDATABASE ||
-                         pcommand->command.id == COMMAND_SETDATABASE ||
-                         pcommand->command.id ==  COMMAND_EXECUTEDDL ||
-                	       pcommand->command.id ==  COMMAND_EXECUTEDML ||
-                	       pcommand->command.id ==  COMMAND_EXECUTEDQL ||
-                	       pcommand->command.id ==  COMMAND_IMPORTCSV  ||//import csv into [table]
-                	       pcommand->command.id ==  COMMAND_IMPORTCSX
+                         pcommand->command.id == COMMAND_SETDATABASE    ||
+                         pcommand->command.id == COMMAND_LISTDATABASE   ||
+                         pcommand->command.id == COMMAND_EXECUTEDDL     ||
+                	       pcommand->command.id == COMMAND_EXECUTEDML     ||
+                	       pcommand->command.id == COMMAND_EXECUTEDQL     ||
+                	       pcommand->command.id == COMMAND_IMPORTCSV      ||//import csv into [table]
+                	       pcommand->command.id == COMMAND_IMPORTCSX
                 	      )
                 {
                     pcommand->command.waitinginput = 1;
@@ -537,13 +568,13 @@ void handle_client_request(int index)
                 }
                 else
                 {
-                    printf("error command %d\n", pcommand->command.id);
+                    log_info("error command %d\n", pcommand->command.id);
                     free(pcommand);
                 }
             }
             else
             {
-                printf("the server is waiting for starting a command, but the input command action is %d\n", start[1]);
+                log_info("the server is waiting for starting a command, but the input command action is %d\n", start[1]);
             }
         }
         else if(pclients[index]->lastcommand != NULL && pclients[index]->lastcommand->command.waitinginput == 1) //waiting for input
@@ -614,19 +645,21 @@ void handle_client_request(int index)
                 }
                 else
                 {
-                     printf("wrong command action %d\n", start[1]);
+                     log_info("wrong command action %d\n", start[1]);
                 }
             }
             else if(pclients[index]->lastcommand->command.id == COMMAND_CREATEDATABASE ||
-            	       pclients[index]->lastcommand->command.id == COMMAND_GETNODEINFO ||
-                     pclients[index]->lastcommand->command.id == COMMAND_SETDATABASE ||
-                     pclients[index]->lastcommand->command.id == COMMAND_EXECUTEDDL ||
-                	   pclients[index]->lastcommand->command.id == COMMAND_EXECUTEDML ||
-                	   pclients[index]->lastcommand->command.id == COMMAND_EXECUTEDQL ||
-                	   pclients[index]->lastcommand->command.id == COMMAND_IMPORTCSV  ||//import csv into [table]
+            	       pclients[index]->lastcommand->command.id == COMMAND_GETNODEINFO    ||
+                     pclients[index]->lastcommand->command.id == COMMAND_SETDATABASE    ||
+                     pclients[index]->lastcommand->command.id == COMMAND_LISTDATABASE   ||
+                     pclients[index]->lastcommand->command.id == COMMAND_EXECUTEDDL     ||
+                	   pclients[index]->lastcommand->command.id == COMMAND_EXECUTEDML     ||
+                	   pclients[index]->lastcommand->command.id == COMMAND_EXECUTEDQL     ||
+                	   pclients[index]->lastcommand->command.id == COMMAND_IMPORTCSV      ||//import csv into [table]
                 	   pclients[index]->lastcommand->command.id == COMMAND_IMPORTCSX
                 	   )
             {
+                int flag = 0;
                 if(start[1]== COMMAND_ACTION_EXESTOP)
                 {
                     pclients[index]->lastcommand->command.waitinginput = 0; //no need to wait for input
@@ -635,6 +668,7 @@ void handle_client_request(int index)
                         if(pchildnodes[j] != NULL)
                         {
                             send(pchildnodes[j]->socket,start, *(short*)(start+2), 0);
+                            flag = 1;
                         }
                     }
                 }
@@ -645,6 +679,7 @@ void handle_client_request(int index)
                         if(pchildnodes[j] != NULL)
                         {
                             send(pchildnodes[j]->socket,start, *(short*)(start+2), 0);
+                            flag = 1;
                         }
                     }
                 }
@@ -655,25 +690,50 @@ void handle_client_request(int index)
                         if(pchildnodes[j] != NULL && *(short*)(start+4) == pchildnodes[j]->id)
                         {
                             send(pchildnodes[j]->socket,start, *(short*)(start+2), 0);
+                            flag = 1;
                         }
                     }
                 }
                 else
                 {
-                    printf("error command id=%d, action=%d\n", pclients[index]->lastcommand->command.id, start[1]);
+                    log_info("error command id=%d, action=%d\n", pclients[index]->lastcommand->command.id, start[1]);
+                }
+                if(flag == 0)
+                {
+                    if(start[1]!= COMMAND_ACTION_EXESTOP)
+                    {
+                        send_info(pclients[index]->socket, pclients[index]->lastcommand->command.id, COMMAND_ACTION_RETOUT_CLIENT, 
+                                  "No doom dh node is available, please add child node first!");
+                    }
+                    else
+                    {
+                        send_info(pclients[index]->socket, pclients[index]->lastcommand->command.id, COMMAND_ACTION_RETSTOP, NULL);
+                        //remove last command
+                        struct doom_dh_command_node* pcommand = pclients[index]->lastcommand; 
+        	              if(pclients[index]->firstcommand == pclients[index]->lastcommand)
+        	              {
+        	                  pclients[index]->firstcommand = pclients[index]->lastcommand = NULL;
+        	              }
+        	              else
+        	              {
+        	                  pclients[index]->lastcommand = pcommand->prev;
+        	                  assert(pclients[index]->lastcommand != NULL);
+        	                  pclients[index]->lastcommand->next = NULL;
+        	              }
+  	                    free(pcommand);
+                    }
                 }
             }
             else
             {
-                printf("error request, the server is waiting for input of command is %d, however the input command is %d\n", 
+                log_info("error request, the server is waiting for input of command is %d, however the input command is %d\n", 
                         pclients[index]->lastcommand->command.id, start[0]);
             }
         }
         else
         {
-            printf("server is not ready to handle request!\n");
-            debug_info("server is not ready to handle request!\n");
-            dump_command_status(pclients[index]->firstcommand);
+            log_info("server is not ready to handle request!\n");
+            //dump_command_status(pclients[index]->firstcommand);
         }
         i += *(short*)(start+2);
     }
@@ -720,7 +780,7 @@ int main(int argc, char* argv[])
         printf("Failed to listen on port %d, errno = %d\n", port, errno);
         return 1;
     }
-    printf("Listening on %s:%s...\n", argv[1], argv[2]);
+    log_info("Listening on %s:%s...\n", argv[1], argv[2]);
     
     for( i = 0; i < MAX_NODE_COUNT; i++)
     {
@@ -806,11 +866,11 @@ int main(int argc, char* argv[])
 
         if(ret < 0)
         {  
-            printf("select error\n");  
+            log_info("select error\n");  
         }
         else if(ret == 0)
         {
-            printf("time out\n");
+            log_info("time out\n");
         }
         else
         {
@@ -836,12 +896,12 @@ int main(int argc, char* argv[])
                     }
                     if(i == MAX_CLIENT_COUNT)
                     {
-                        printf("ERR: failed to connect to the server, too many connections\n");
+                        log_info("ERR: failed to connect to the server, too many connections\n");
                         close(cli);
                     }
                     else
                     {
-                        printf("Connected to %s:%d\n",inet_ntoa(cliaddr.sin_addr),  
+                        log_info("Connected to %s:%d\n",inet_ntoa(cliaddr.sin_addr),  
                                 ntohs(cliaddr.sin_port));
                     
                     }

@@ -1,2 +1,2 @@
-ADD_EXECUTABLE(test Test.c)
-TARGET_LINK_LIBRARIES(test pthread)
+ADD_EXECUTABLE(ddhtest Test.c)
+TARGET_LINK_LIBRARIES(ddhtest pthread)

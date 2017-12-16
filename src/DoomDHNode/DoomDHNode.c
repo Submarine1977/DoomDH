@@ -9,11 +9,13 @@
 #include<string.h>  
 #include<errno.h>
 #include<assert.h>
+#include <time.h>
+#include <sys/time.h>
 
 #include "../Sqlite/sqlite3.h"
 #include "../Command.h"
 
-#define DEBUG            0
+#define DEBUG            1
 #define BUFFER_SIZE      65536
 #define MAX_NODE_COUNT   1024
 #define MAX_SERVER_COUNT 128
@@ -45,32 +47,44 @@ int send_info(int socket, char command, char action, char* fmt, ...)
 
 int debug_info(char *fmt, ... )
 {
+    time_t timep; 
     int     n;
     va_list args;
     char   filename[64];
     FILE *f;
     
-    sprintf(filename, "./debug_%d.log", nodeid);
+    sprintf(filename, "./debug_%d.txt", nodeid);
     f = fopen(filename, "a+");
+ 
+    time (&timep); 
+    fprintf(f, "[%s]",ctime(&timep));
+
     va_start(args, fmt);
     n = vfprintf(f, fmt, args);
     va_end(args);
+
     fclose(f);
     return n;    
 }
 
-int error_info(char *fmt, ... )
+int log_info(char *fmt, ... )
 {
+    time_t timep; 
     int     n;
     va_list args;
     char   filename[64];
     FILE *f;
     
-    sprintf(filename, "./error_%d.log", nodeid);
+    sprintf(filename, "./log_%d.txt", nodeid);
     f = fopen(filename, "a+");
+
+    time (&timep); 
+    fprintf(f, "[%s]",ctime(&timep));
+
     va_start(args, fmt);
     n = vfprintf(f, fmt, args);
     va_end(args);
+
     fclose(f);
     return n;    
 }
@@ -400,10 +414,10 @@ void import_csv(char* buffer, int server, int flag)
     {
         if(m != n)
         {
-            error_info("error: the table has %d field,the line %d of csv has %d field, pos = %d\n", n, import_csv_count, m, pos);
+            log_info("error: the table has %d field,the line %d of csv has %d field, pos = %d\n", n, import_csv_count, m, pos);
             for(i = 0; i < m; i++)
             {
-                error_info("field[%d] = %s\n", i, field[i]);
+                log_info("field[%d] = %s\n", i, field[i]);
             }
         }
         else
@@ -541,6 +555,26 @@ struct doom_dh_database* create_database(char* buffer, int server)
     }
 };
 
+void list_database(char* buffer, int server)
+{
+    int i;
+    
+    for(i = 0; i < MAX_DB_COUNT; i++)
+    {
+        if(databases[i].db != NULL)
+        {
+            if(pcurrentdb != &databases[i])
+            {
+                send_info( server, COMMAND_LISTDATABASE, COMMAND_ACTION_RETOUT_CLIENT, "%s", databases[i].name);
+            }
+            else
+            {
+                send_info( server, COMMAND_LISTDATABASE, COMMAND_ACTION_RETOUT_CLIENT, "%s(*)", databases[i].name);
+            }
+        }
+    }
+}
+
 void get_node_info(char* buffer, int server)
 {
     int i;
@@ -557,10 +591,10 @@ void get_node_info(char* buffer, int server)
 
     if(strcasecmp(name, "ID") == 0)
     {
-        send_info(server, COMMAND_GETNODEINFO, COMMAND_ACTION_RETOUT_SERVER, "ID:%d", nodeid);
+        send_info(server, COMMAND_GETNODEINFO, COMMAND_ACTION_RETOUT_CLIENT, "ID:%d", nodeid);
         return;
     }
-    send_info( server, COMMAND_GETNODEINFO, COMMAND_ACTION_RETOUT_SERVER, "error:do not have the %s infomation", name);
+    send_info( server, COMMAND_GETNODEINFO, COMMAND_ACTION_RETOUT_CLIENT, "error:do not have the %s infomation", name);
 }
 struct doom_dh_node* add_sibling_node(char* buffer, int server)
 {
@@ -660,14 +694,14 @@ void handle_server_request(int index)
     if(ret == 0)
     {   
         close(pservers[index]->socket);
-        printf("Server connection %s:%d closed!\n", pservers[index]->ip, pservers[index]->port);
+        log_info("Server connection %s:%d closed!\n", pservers[index]->ip, pservers[index]->port);
         free(pservers[index]);
         pservers[index] = NULL;
         return;
     }
     else if(ret < 0)
     {
-        printf("error recieve data, errno = %d\n", errno);
+        log_info("error recieve data, errno = %d\n", errno);
         return;
     }
     //ret > 0
@@ -681,7 +715,7 @@ void handle_server_request(int index)
     if( pservers[index]->buffer[0] == COMMAND_QUIT)
     {
         close(pservers[index]->socket);
-        printf("Connection %s:%d closed!\n", pservers[index]->ip, pservers[index]->port);
+        log_info("Connection %s:%d closed!\n", pservers[index]->ip, pservers[index]->port);
         free(pservers[index]);
         pservers[index] = NULL;
     }
@@ -722,6 +756,7 @@ void handle_server_request(int index)
                 	  pcommand->command.id == COMMAND_GETNODEINFO     ||
                 	  pcommand->command.id == COMMAND_CREATEDATABASE  ||
                 	  pcommand->command.id == COMMAND_SETDATABASE     ||
+                	  pcommand->command.id == COMMAND_LISTDATABASE    ||
                 	  pcommand->command.id == COMMAND_EXECUTEDDL      ||
                 	  pcommand->command.id == COMMAND_EXECUTEDML      ||
                 	  pcommand->command.id == COMMAND_EXECUTEDQL      ||
@@ -736,13 +771,13 @@ void handle_server_request(int index)
                 }
                 else
                 {
-                    printf("error command %d\n", pcommand->command.id);
+                    log_info("error command %d\n", pcommand->command.id);
                     free(pcommand);
                 }
             }
             else
             {
-                printf("the server is waiting for starting a command, but the input command action is %d\n", start[1]);
+                log_info("the server is waiting for starting a command, but the input command action is %d\n", start[1]);
             }
         }
         else
@@ -775,6 +810,10 @@ void handle_server_request(int index)
                 {
                     set_database(start + offset, pservers[index]->socket);
                 }
+                else if(pservers[index]->lastcommand->command.id == COMMAND_LISTDATABASE)	
+                {
+                    list_database(start + offset, pservers[index]->socket);
+                }
                 else if(pservers[index]->lastcommand->command.id == COMMAND_EXECUTEDDL)	
                 {
                     execute_ddl(start + offset, pservers[index]->socket);
@@ -797,7 +836,7 @@ void handle_server_request(int index)
                 }
                 else
                 {
-                    printf("error request command=%d\n", pservers[index]->lastcommand->command.id);
+                    log_info("error request command=%d\n", pservers[index]->lastcommand->command.id);
                 }
             }
             else
@@ -901,8 +940,8 @@ int main(int argc, char* argv[])
         return 1;
     }
     
-    printf("Listening server on %s:%s...\n", argv[2], argv[3]);
-    printf("Listening node on %s:%s...\n", argv[2], argv[4]);
+    log_info("Listening server on %s:%s...\n", argv[2], argv[3]);
+    log_info("Listening node on %s:%s...\n", argv[2], argv[4]);
 
     
     for(i = 0; i < MAX_DB_COUNT; i++)
@@ -996,11 +1035,11 @@ int main(int argc, char* argv[])
 
         if(ret < 0)  
         {  
-            printf("select error\n");  
+            log_info("select error\n");  
         }
         else if(ret == 0)
         {
-            printf("time out\n");
+            log_info("time out\n");
         }
         else
         {
@@ -1026,12 +1065,12 @@ int main(int argc, char* argv[])
                     }
                     if(i == MAX_SERVER_COUNT)
                     {
-                        printf(outbuf, "error: failed to connect to the server, too many connections\n");
+                        log_info(outbuf, "error: failed to connect to the server, too many connections\n");
                         close(cli);
                     }
                     else
                     {
-                        printf("Connected to %s:%d\n",inet_ntoa(cliaddr.sin_addr),  
+                        log_info("Connected to %s:%d\n",inet_ntoa(cliaddr.sin_addr),  
                                 ntohs(cliaddr.sin_port));
                     
                     }
@@ -1058,12 +1097,12 @@ int main(int argc, char* argv[])
                     }
                     if(i == MAX_NODE_COUNT)
                     {
-                        printf(outbuf, "error:Failed to connect to sibling node, too many connections\n");
+                        log_info(outbuf, "error:Failed to connect to sibling node, too many connections\n");
                         close(cli);
                     }
                     else
                     {
-                        printf("connect to sibling node %s:%d\n",inet_ntoa(cliaddr.sin_addr),  
+                        log_info("connect to sibling node %s:%d\n",inet_ntoa(cliaddr.sin_addr),  
                                 ntohs(cliaddr.sin_port));
                     }
                 }
