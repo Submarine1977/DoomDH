@@ -120,7 +120,7 @@ void *handle_response(void *arg)
                 else
                 {
                     inbuflength += ret;
-                    while(inbuflength > 4)
+                    while(inbuflength >= 4)
                     {
                         t = *(short*)(inbuf + 2);
                         if(t > inbuflength)
@@ -135,20 +135,27 @@ void *handle_response(void *arg)
                         {
                             printf("%d,%d\n", inbuf[0], inbuf[1]);
                         }
-                        memmove(inbuf, inbuf + t, inbuflength - t);
-                        inbuflength -= t;
+                        if(inbuf[0] == COMMAND_GETNODEINFO && inbuf[1] == COMMAND_ACTION_RETOUT_CLIENT)
+                        {
+                            char *p = inbuf + 4; // (ip:port)ID:XXX
+                            p = strstr(p, ")");
+                            if(p != NULL && strncasecmp(p + 1, "ID:", strlen("ID:")) == 0)
+                            {
+                                p += 1 + strlen("ID:");
+                                nodeids[nodecount] = atoi(p); 
+                                nodecount++;
+                            }
+                        }
                         if(inbuf[1] == COMMAND_ACTION_RETSTOP)
                         {
                             command_status --;
                         }
-                        if(inbuf[0] == COMMAND_GETNODEINFO && inbuf[1] == COMMAND_ACTION_RETOUT_CLIENT)
+                        if(DEBUG)
                         {
-                            char *p = inbuf + 4; // (ip:port)ID:XXX
-                            p = strstr(p, ":");
-                            p = strstr(p, ":");
-                            nodeids[nodecount] = atoi(p + 1); 
-                            nodecount++;
+                            printf("inbuflength = %d, t = %d, command_status = %d\n", inbuflength, t, command_status);
                         }
+                        memmove(inbuf, inbuf + t, inbuflength - t);
+                        inbuflength -= t;
                     }
                 }
             }
@@ -159,6 +166,8 @@ void *handle_response(void *arg)
 
 int get_node_info()
 {
+    nodecount = 0;
+    
     command_status++;
 
     outbuf[0] = COMMAND_GETNODEINFO;
@@ -181,6 +190,7 @@ int get_node_info()
     {
         usleep(1000);
     }
+    return 1;
 }
 
 int connect_to_server(char *ip, int port)
@@ -362,13 +372,13 @@ int handle_command(char *buffer)
         send(ser, outbuf, 4,0);
 
     }
-    else if(strncasecmp(buffer, ".listdatabase ", strlen(".listdatabase ")) == 0)
+    else if(strncasecmp(buffer, ".listdatabase", strlen(".listdatabase")) == 0)
     {
-        buffer += strlen(".listdatabase ");
+        buffer += strlen(".listdatabase");
         m = split_string(buffer, param);
         if(m != 0)
         {
-            printf("Please use commmand \".list database\" to get database list!\n");
+            printf("Please use commmand \".listdatabase\" to get database list!\n");
             return 0;
         }
 
@@ -427,7 +437,7 @@ int handle_command(char *buffer)
             printf("Please use commmand \".importcsv csvfile table\" to import a csv file to database!\n");
             return 0;
         }
-        
+        import_csv(param[0], param[1]);
     }
     else
     {
@@ -456,6 +466,7 @@ int handle_sql(char * buffer)
     else
     {
         printf("Error SQL sentence!");
+        return 0;
     }
     
     command_status++;

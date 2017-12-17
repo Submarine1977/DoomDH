@@ -45,36 +45,6 @@ int send_info(int socket, char command, char action, char* fmt, ...)
     send(socket,outbuf, *(short*)(outbuf + 2), 0);
 }
 
-int debug_info(char *fmt, ... )
-{
-    time_t timep; 
-    int     n;
-    va_list args;
-    char   filename[64];
-    FILE *f;
-    char strtime[128], *p;
-   
-    sprintf(filename, "./debug_%d.txt", nodeid);
-    f = fopen(filename, "a+");
- 
-    time (&timep); 
-    sprintf(strtime, "%s", ctime(&timep));
-    p = strtime + strlen(strtime) - 1;
-    while(*p == '\n' || *p == '\r')
-    {
-        *p = '\0';
-        p--;
-    }
-    fprintf(f, "[%s]",strtime);
-
-    va_start(args, fmt);
-    n = vfprintf(f, fmt, args);
-    va_end(args);
-
-    fclose(f);
-    return n;    
-}
-
 int log_info(char *fmt, ... )
 {
     time_t timep; 
@@ -112,7 +82,7 @@ void dumpbuffer(char *buffer, int length)
     FILE *f;
     char str[16];
 
-    sprintf(filename, "./debug_%d.txt", nodeid);
+    sprintf(filename, "./log_%d.txt", nodeid);
     f = fopen(filename, "a+");
     for(i = 0; i < length; i++)
     {
@@ -131,7 +101,7 @@ void dump_command_status(struct doom_dh_command_node *pcommand)
 {
     char   filename[64];
     FILE *f;
-    sprintf(filename, "./debug_%d.txt", nodeid);
+    sprintf(filename, "./log_%d.txt", nodeid);
     f = fopen(filename, "a+");
     while(pcommand != NULL)
     {
@@ -141,7 +111,6 @@ void dump_command_status(struct doom_dh_command_node *pcommand)
     }
     fclose(f);
 };
-
 
 int commandno = 1;
 
@@ -636,7 +605,7 @@ struct doom_dh_node* add_sibling_node(char* buffer, int server)
 
     if(DEBUG)
     {
-        debug_info("add_sibling_node %s %s\n", ip, port);
+        log_info("add_sibling_node %s %s\n", ip, port);
     }     
     
     for(j = 0; j < MAX_NODE_COUNT; j++)
@@ -724,7 +693,7 @@ void handle_server_request(int index)
     pservers[index]->bufferlength += ret;
     if(DEBUG)
     {
-        debug_info("handle_client_request[%d] buffer = \n", index);
+        log_info("handle_client_request[%d] buffer = \n", index);
         dumpbuffer(pservers[index]->buffer, pservers[index]->bufferlength);
     }
 
@@ -748,7 +717,7 @@ void handle_server_request(int index)
 
         if(DEBUG)
         {
-            debug_info("handle_server_request: server index = %d, start = \n", index);
+            log_info("handle_server_request: server index = %d, start = \n", index);
             dumpbuffer(start, *(short*)(start + 2));
             dump_command_status(pservers[index]->firstcommand);
         }
@@ -896,7 +865,7 @@ void handle_server_request(int index)
         //}
         if(*(short*)(start+2) < 4)
         {
-            debug_info("error: wrong request, length=%d!", *(short*)(start+2));
+            log_info("error: wrong request, length=%d!", *(short*)(start+2));
             pservers[index]->bufferlength = 0;
             return;
         }
@@ -904,7 +873,6 @@ void handle_server_request(int index)
         {
             i += *(short*)(start+2);
         }
-        i += *(short*)(start+2);
     }
     if(i < pservers[index]->bufferlength)
     {
@@ -995,22 +963,22 @@ int main(int argc, char* argv[])
         //dump client and node socket status
         if(DEBUG)
         {
-            debug_info("=============Loop started===============\n"	);
-            debug_info("\nserver socket status:\n");
+            log_info("=============Loop started===============\n"	);
+            log_info("server socket status:\n");
             for(i = 0; i < MAX_SERVER_COUNT; i++)
             {
                 if(pservers[i] != NULL)
                 {
-                    debug_info("pservers[%d](%s:%d)\n", i, pservers[i]->ip, pservers[i]->port);
+                    log_info("pservers[%d](%s:%d)\n", i, pservers[i]->ip, pservers[i]->port);
                     dump_command_status(pservers[i]->firstcommand);
                 }
             }
-            debug_info("\nsibling node socket status:\n");
+            log_info("sibling node socket status:\n");
             for(j = 0; j < MAX_NODE_COUNT; j++)
             {
                 if(psiblingnodes[j] != NULL)
                 {
-                    debug_info("psiblingnodes[%d](%s:%d)\n", j, psiblingnodes[j]->ip, psiblingnodes[j]->port);
+                    log_info("psiblingnodes[%d](%s:%d)\n", j, psiblingnodes[j]->ip, psiblingnodes[j]->port);
                     dump_command_status(psiblingnodes[j]->firstcommand);
                 }
             }
@@ -1033,7 +1001,7 @@ int main(int argc, char* argv[])
                 max_fd = psiblingnodes[i]->socket > max_fd ? psiblingnodes[i]->socket : max_fd;
                 if(DEBUG)
                 {
-                    debug_info("select from psiblingnodes[%d]\n", i);
+                    log_info("select from psiblingnodes[%d]\n", i);
                 }
             }
         }
@@ -1042,19 +1010,19 @@ int main(int argc, char* argv[])
         //dump select result
         if(DEBUG)
         {
-            debug_info("\nselect result:\n");
+            log_info("select result:\n");
             for(i = 0; i < MAX_SERVER_COUNT; i++)
             {
                 if(pservers[i]!= NULL && FD_ISSET(pservers[i]->socket, &rdfs))
                 {
-                    debug_info("pservers[%d] is selected\n", i);;
+                    log_info("pservers[%d] is selected\n", i);;
                 }
             }
             for(j = 0; j < MAX_NODE_COUNT; j++)
             {
                 if(psiblingnodes[j] != NULL && FD_ISSET(psiblingnodes[j]->socket, &rdfs))
                 {
-                    debug_info("childnode[%d] is selected\n", j);
+                    log_info("childnode[%d] is selected\n", j);
                 }
             }
         }
