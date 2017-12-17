@@ -13,7 +13,7 @@
 
 #include "../Command.h"
 
-#define DEBUG            0
+#define DEBUG            1
 //#define BUFFER_SIZE      32760
 #define BUFFER_SIZE      2048
 
@@ -57,13 +57,17 @@ int split_string(char* buffer, char** field)
             buffer[i] = '\0';
             field[m] = buffer + i + 1;
             m++;
+            i++;
+            //skip space
+		        while(buffer[i] == '\t' || buffer[i] == ' ')
+		        {
+		            i++;
+		        }
         }
-        i++;
-        //skip space
-		    while(buffer[i] == '\t' || buffer[i] == ' ')
-		    {
-		        i++;
-		    }
+        else
+        {
+            i++;
+        }
     }
     return m;
 }
@@ -75,24 +79,28 @@ void *handle_response(void *arg)
     int t, ret;
     int max_fd;
     
-    ser = *(int*)arg;
 	  memset(inbuf, 0, BUFFER_SIZE);
     inbuflength = 0;
     while(1)
     {
         FD_ZERO(&rdfs);
-        //FD_SET(0, &rdfs);
-        //FD_SET(1, &rdfs);
+        ser = *(int*)arg;
+        if(ser == -1)
+        {
+            sleep(1);
+            continue;
+        }
+
         FD_SET(ser, &rdfs);
         max_fd = ser;
         ret = select(max_fd + 1,&rdfs,NULL, NULL, NULL);
         if(ret < 0)
         {  
-            printf("select error\n");  
+            //printf("select error\n");  
         }
         else if(ret == 0)
         {
-            printf("time out\n");
+            //printf("time out\n");
         }
         else
         {
@@ -119,7 +127,14 @@ void *handle_response(void *arg)
                         {
                             break;
                         }
-                        printf("%d,%d: %s\n", inbuf[0], inbuf[1], inbuf + 4);
+                        if(t > 4)
+                        {
+                            printf("%d,%d: %s\n", inbuf[0], inbuf[1], inbuf + 4);
+                        }
+                        else
+                        {
+                            printf("%d,%d\n", inbuf[0], inbuf[1]);
+                        }
                         memmove(inbuf, inbuf + t, inbuflength - t);
                         inbuflength -= t;
                         if(inbuf[1] == COMMAND_ACTION_RETSTOP)
@@ -170,14 +185,15 @@ int get_node_info()
 
 int connect_to_server(char *ip, int port)
 {
+    int ret;
     struct sockaddr_in seraddr;  
     seraddr.sin_family =AF_INET;  
     seraddr.sin_port   = htons(port);
     seraddr.sin_addr.s_addr=inet_addr(ip);
     ser = socket(AF_INET,SOCK_STREAM,0);  
-    if(connect(ser,(struct sockaddr*)&seraddr,sizeof(seraddr)) < 0)
+    if((ret = connect(ser,(struct sockaddr*)&seraddr,sizeof(seraddr))) < 0)
     {
-        printf("error:Failed to connect to server\n");
+        printf("error:Failed to connect to server, ret = %d, errno=%d\n", ret, errno);
         ser = -1;
     }
     return ser;
@@ -257,7 +273,18 @@ int handle_command(char *buffer)
     if(strncasecmp(buffer, ".connect ", strlen(".connect ")) == 0)
     {
         buffer += strlen(".connect ");
+        if(DEBUG)
+        {
+            printf("buffer=%s\n", buffer);
+        }
         m = split_string(buffer, param);
+        if(DEBUG)
+        {
+            for(i = 0; i < m; i++)
+            {
+                printf("param[%d] = %s\n", i, param[i]);
+            }
+        }
         if(m != 2)
         {
             printf("Please use commmand \".connect ip port\" to connect to the server!\n");
@@ -269,11 +296,11 @@ int handle_command(char *buffer)
             close(ser);
             ser = -1;
         }
-        ser = connect_to_server(ip, port);
+        ser = connect_to_server(param[0], atoi(param[1]));
         if(ser != -1)
         {
            strcpy(ip, param[0]);
-           port = atoi(param[i]);
+           port = atoi(param[1]);
         
         }
         
@@ -496,13 +523,18 @@ int main(int argc, char* argv[])
         line[ret - 1] = '\0';
         ret --;
         strcat(command, line);
+        if(DEBUG)
+        {
+            printf("command = %s\n", command);
+        }
         if(strlen(command) == 0)
         {
             //do nothing
         }
-        else if(command[0] == '.' || command[strlen(command)-1] == ';') // command is singal line, SQL should end as ';'
+        else if( command[0] == '.' || // command is singal line
+        	        command[strlen(command)-1] == ';') // SQL should end as ';'
         {
-            if(strcasecmp(line, ".quit") == 0 || strcasecmp(line, ".q") == 0)
+            if(strcasecmp(command, ".quit") == 0 || strcasecmp(command, ".q") == 0)
             {
                 break;
             }
@@ -514,29 +546,30 @@ int main(int argc, char* argv[])
                 }
                 else
                 {
-                    handle_command(line);
+                    handle_command(command);
                 }
             }
-            else if(ret > 0 && line[0] == '.')
+            else if(strlen(command) > 0 && command[0] == '.')
             {
-                handle_command(line);
+                handle_command(command);
                 while(command_status > 0)
                 {
                     usleep(1000);
                 }
             }
-            else if(ret > 0)
+            else if(strlen(command) > 0)
             {
-                handle_sql(line);
+                handle_sql(command);
                 while(command_status > 0)
                 {
                     usleep(1000);
                 }
             }
+            command[0] = '\0';
         }
         else
         {
-            command[strlen(command)-1] = '\0';
+            //command[strlen(command)-1] = '\0';
         }
         if(ser == -1)
         {

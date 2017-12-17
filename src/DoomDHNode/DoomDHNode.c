@@ -52,12 +52,20 @@ int debug_info(char *fmt, ... )
     va_list args;
     char   filename[64];
     FILE *f;
-    
+    char strtime[128], *p;
+   
     sprintf(filename, "./debug_%d.txt", nodeid);
     f = fopen(filename, "a+");
  
     time (&timep); 
-    fprintf(f, "[%s]",ctime(&timep));
+    sprintf(strtime, "%s", ctime(&timep));
+    p = strtime + strlen(strtime) - 1;
+    while(*p == '\n' || *p == '\r')
+    {
+        *p = '\0';
+        p--;
+    }
+    fprintf(f, "[%s]",strtime);
 
     va_start(args, fmt);
     n = vfprintf(f, fmt, args);
@@ -74,12 +82,20 @@ int log_info(char *fmt, ... )
     va_list args;
     char   filename[64];
     FILE *f;
+    char strtime[128], *p;
     
     sprintf(filename, "./log_%d.txt", nodeid);
     f = fopen(filename, "a+");
 
     time (&timep); 
-    fprintf(f, "[%s]",ctime(&timep));
+    sprintf(strtime, "%s", ctime(&timep));
+    p = strtime + strlen(strtime) - 1;
+    while(*p == '\n' || *p == '\r')
+    {
+        *p = '\0';
+        p--;
+    }
+    fprintf(f, "[%s]",strtime);
 
     va_start(args, fmt);
     n = vfprintf(f, fmt, args);
@@ -96,7 +112,7 @@ void dumpbuffer(char *buffer, int length)
     FILE *f;
     char str[16];
 
-    sprintf(filename, "./debug_%d.log", nodeid);
+    sprintf(filename, "./debug_%d.txt", nodeid);
     f = fopen(filename, "a+");
     for(i = 0; i < length; i++)
     {
@@ -115,7 +131,7 @@ void dump_command_status(struct doom_dh_command_node *pcommand)
 {
     char   filename[64];
     FILE *f;
-    sprintf(filename, "./debug_%d.log", nodeid);
+    sprintf(filename, "./debug_%d.txt", nodeid);
     f = fopen(filename, "a+");
     while(pcommand != NULL)
     {
@@ -878,6 +894,16 @@ void handle_server_request(int index)
         //    printf("node is not ready to handle request\n");
         //    dump_command_status(pservers[index]->firstcommand);
         //}
+        if(*(short*)(start+2) < 4)
+        {
+            debug_info("error: wrong request, length=%d!", *(short*)(start+2));
+            pservers[index]->bufferlength = 0;
+            return;
+        }
+        else
+        {
+            i += *(short*)(start+2);
+        }
         i += *(short*)(start+2);
     }
     if(i < pservers[index]->bufferlength)

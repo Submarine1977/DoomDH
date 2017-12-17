@@ -79,11 +79,19 @@ int debug_info(char *fmt, ... )
     int     n;
     va_list args;
     FILE *f;
+    char strtime[128], *p;
 
     f = fopen("debug.txt", "a+");
 
     time (&timep); 
-    fprintf(f, "[%s]",ctime(&timep));
+    sprintf(strtime, "%s", ctime(&timep));
+    p = strtime + strlen(strtime) - 1;
+    while(*p == '\n' || *p == '\r')
+    {
+        *p = '\0';
+        p--;
+    }
+    fprintf(f, "[%s]",strtime);
     
     va_start(args, fmt);
     n = vfprintf(f, fmt, args);
@@ -99,11 +107,19 @@ int log_info(char *fmt, ... )
     int     n;
     va_list args;
     FILE *f;
+    char strtime[128], *p;
 
     f = fopen("log.txt", "a+");
 
     time (&timep); 
-    fprintf(f, "[%s]",ctime(&timep));
+    sprintf(strtime, "%s", ctime(&timep));
+    p = strtime + strlen(strtime) - 1;
+    while(*p == '\n' || *p == '\r')
+    {
+        *p = '\0';
+        p--;
+    }
+    fprintf(f, "[%s]",strtime);
 
     va_start(args, fmt);
     n = vfprintf(f, fmt, args);
@@ -119,7 +135,7 @@ void dumpbuffer(char *buffer, int length)
     int i;
     char str[16];
     FILE *f;
-    f = fopen("debug.log", "a+");
+    f = fopen("debug.txt", "a+");
     for(i = 0; i < length; i++)
     {
         sprintf(str, "%02x", buffer[i]);
@@ -136,7 +152,7 @@ void dumpbuffer(char *buffer, int length)
 void dump_command_status(struct doom_dh_command_node *pcommand)
 {
     FILE *f;
-    f = fopen("debug.log", "a+");
+    f = fopen("debug.txt", "a+");
     while(pcommand != NULL)
     {
         fprintf(f, "Command %d: no=%d,parentno=%d, waitinginput=%d, waitingresult=%d\n", 
@@ -700,6 +716,7 @@ void handle_client_request(int index)
                 }
                 if(flag == 0)
                 {
+                    log_info("No doom dh node is available, please add child node first!\n");
                     if(start[1]!= COMMAND_ACTION_EXESTOP)
                     {
                         send_info(pclients[index]->socket, pclients[index]->lastcommand->command.id, COMMAND_ACTION_RETOUT_CLIENT, 
@@ -735,7 +752,16 @@ void handle_client_request(int index)
             log_info("server is not ready to handle request!\n");
             //dump_command_status(pclients[index]->firstcommand);
         }
-        i += *(short*)(start+2);
+        if(*(short*)(start+2) < 4)
+        {
+            debug_info("error: wrong request, length=%d!", *(short*)(start+2));
+            pclients[index]->bufferlength = 0;
+            return;
+        }
+        else
+        {
+            i += *(short*)(start+2);
+        }
     }
     if(i < pclients[index]->bufferlength)
     {
