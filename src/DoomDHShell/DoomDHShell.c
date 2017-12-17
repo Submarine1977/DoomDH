@@ -28,6 +28,8 @@ int       nodecount;
 
 pthread_t ntid; 
 
+pthread_mutex_t mutex;
+
 int  command_status; // >0--executing, 0--idle
 char ip[16];
 int  port;
@@ -148,7 +150,9 @@ void *handle_response(void *arg)
                         }
                         if(inbuf[1] == COMMAND_ACTION_RETSTOP)
                         {
+                            pthread_mutex_lock(&mutex);
                             command_status --;
+                            pthread_mutex_unlock(&mutex);
                         }
                         if(DEBUG)
                         {
@@ -168,7 +172,9 @@ int get_node_info()
 {
     nodecount = 0;
     
+    pthread_mutex_lock(&mutex);
     command_status++;
+    pthread_mutex_unlock(&mutex);
 
     outbuf[0] = COMMAND_GETNODEINFO;
     outbuf[1] = COMMAND_ACTION_EXESTART;
@@ -219,6 +225,11 @@ int import_csv(char *csvfile, char* table)
     {
         return 0;
     }
+
+
+    pthread_mutex_lock(&mutex);
+    command_status++;
+    pthread_mutex_unlock(&mutex);
     
     sprintf(outbuf + 4, "%s", table);
     outbuf[0] = COMMAND_IMPORTCSV;
@@ -325,7 +336,9 @@ int handle_command(char *buffer)
             return 0;
         }
     
+        pthread_mutex_lock(&mutex);
         command_status++;
+        pthread_mutex_unlock(&mutex);
 
         outbuf[0] = COMMAND_ADDCHILDNODE;
         outbuf[1] = COMMAND_ACTION_EXESTART;
@@ -353,7 +366,9 @@ int handle_command(char *buffer)
             return 0;
         }
         
+        pthread_mutex_lock(&mutex);
         command_status++;
+        pthread_mutex_unlock(&mutex);
         
         outbuf[0] = COMMAND_CREATEDATABASE;
         outbuf[1] = COMMAND_ACTION_EXESTART;
@@ -382,7 +397,9 @@ int handle_command(char *buffer)
             return 0;
         }
 
+        pthread_mutex_lock(&mutex);
         command_status++;
+        pthread_mutex_unlock(&mutex);
 
         outbuf[0] = COMMAND_LISTDATABASE;
         outbuf[1] = COMMAND_ACTION_EXESTART;
@@ -410,7 +427,9 @@ int handle_command(char *buffer)
             return 0;
         }
         
+        pthread_mutex_lock(&mutex);
         command_status++;
+        pthread_mutex_unlock(&mutex);
         
         outbuf[0] = COMMAND_SETDATABASE;
         outbuf[1] = COMMAND_ACTION_EXESTART;
@@ -469,7 +488,9 @@ int handle_sql(char * buffer)
         return 0;
     }
     
+    pthread_mutex_lock(&mutex);
     command_status++;
+    pthread_mutex_unlock(&mutex);
     
     outbuf[0] = command;
     outbuf[1] = COMMAND_ACTION_EXESTART;
@@ -513,6 +534,13 @@ int main(int argc, char* argv[])
     }
     
     int temp;
+    
+    if(pthread_mutex_init(&mutex,NULL) != 0 )  
+    {  
+        printf("Init metux error.");  
+        return 1;  
+    }
+    
     if((temp=pthread_create(&ntid,NULL,handle_response,(void*)&ser))!= 0)  
     {  
         printf("can't create thread: %s\n",strerror(temp));  
