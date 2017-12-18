@@ -491,6 +491,47 @@ struct doom_dh_database* set_database(char* buffer, int server)
     return NULL;
 }
 
+void create_ddhtables(sqlite3 *db, int server)
+{
+    char buf[512], sqlfile[512], sql[8192],*errmsg;
+    char tables[][8] = {"DDH_CHA"};
+    int  i, rc, count; 
+    FILE *f;
+    
+    count = readlink("/proc/self/exe", buf, 512);
+    if(count < 0)
+    {
+        log_info("error: create_ddhtables, failed to get exe path.\n");
+        return;
+    }
+    strcat(buf, "/DDHModel/");
+    
+    for(i = 0; i < sizeof(tables) /sizeof(char[8]); i++)
+    {
+        sprintf(sqlfile,"%s%s", buf, tables[i]);
+        f = fopen(sqlfile, "r");
+        if(f)
+        {
+            if((rc = fread(sql, 1, sizeof(sql), f)) > 0)
+            {
+                rc = sqlite3_exec(db, sql,NULL,NULL,&errmsg);
+                if(rc != SQLITE_OK)
+                {
+                    send_info( server, COMMAND_EXECUTEDDL, COMMAND_ACTION_RETOUT_CLIENT, "error:%s", errmsg);
+                }
+            }
+            else
+            {
+                log_info("error: create_ddhtables, failed to read file %s, rc = %d\n", sqlfile, rc);
+            }
+        }
+        else
+        {
+            log_info("error: create_ddhtables, failed to open file %s\n", sqlfile);
+        }
+    }
+}
+
 struct doom_dh_database* create_database(char* buffer, int server)
 {
     int i, rc;
@@ -523,6 +564,10 @@ struct doom_dh_database* create_database(char* buffer, int server)
         if(rc == SQLITE_OK)
         {
             send_info( server, COMMAND_CREATEDATABASE, COMMAND_ACTION_RETOUT_CLIENT, "Database %s was created!", name);
+            
+            //create DDH tables
+            create_ddhtables(databases[i].db, server);
+            
             return &databases[i];
         }
         else

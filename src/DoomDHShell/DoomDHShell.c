@@ -14,8 +14,7 @@
 #include "../Command.h"
 
 #define DEBUG            0
-//#define BUFFER_SIZE      32760
-#define BUFFER_SIZE      2048
+#define BUFFER_SIZE      32760
 
 char      inbuf[BUFFER_SIZE];
 int       inbuflength;
@@ -25,12 +24,10 @@ char      command[BUFFER_SIZE];
 int       nodeids[1024];
 int       nodecount;
 
-
 pthread_t ntid; 
-
 pthread_mutex_t mutex;
-
 int  command_status; // >0--executing, 0--idle
+
 char ip[16];
 int  port;
 int  ser;
@@ -61,10 +58,10 @@ int split_string(char* buffer, char** field)
             m++;
             i++;
             //skip space
-		        while(buffer[i] == '\t' || buffer[i] == ' ')
-		        {
-		            i++;
-		        }
+            while(buffer[i] == '\t' || buffer[i] == ' ')
+            {
+                i++;
+            }
         }
         else
         {
@@ -549,7 +546,6 @@ int main(int argc, char* argv[])
     }
     
     int temp;
-    
     if(pthread_mutex_init(&mutex,NULL) != 0 )  
     {  
         printf("Init metux error.");  
