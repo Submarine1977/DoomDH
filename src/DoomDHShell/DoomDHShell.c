@@ -13,7 +13,7 @@
 
 #include "../Command.h"
 
-#define DEBUG            1
+#define DEBUG            0
 //#define BUFFER_SIZE      32760
 #define BUFFER_SIZE      2048
 
@@ -201,16 +201,27 @@ int get_node_info()
 
 int connect_to_server(char *ip, int port)
 {
-    int ret;
+    int i = 0, ret;
     struct sockaddr_in seraddr;  
     seraddr.sin_family =AF_INET;  
     seraddr.sin_port   = htons(port);
     seraddr.sin_addr.s_addr=inet_addr(ip);
     ser = socket(AF_INET,SOCK_STREAM,0);  
-    if((ret = connect(ser,(struct sockaddr*)&seraddr,sizeof(seraddr))) < 0)
+    
+    while((ret = connect(ser,(struct sockaddr*)&seraddr,sizeof(seraddr))) < 0)
     {
         printf("error:Failed to connect to server, ret = %d, errno=%d\n", ret, errno);
+        i ++;
         ser = -1;
+        if(i > 3)
+        {
+            break;
+        }
+        else
+        {
+            printf("try 5 second later ...\n");
+            sleep(5);
+        }
     }
     return ser;
 }
@@ -280,6 +291,10 @@ int import_csv(char *csvfile, char* table)
             j++;
         }
         fclose(f);
+	  }
+	  else
+	  {
+	      printf("Failed to open file %s\n", csvfile);
 	  }
 	  	  
     outbuf[0] = COMMAND_IMPORTCSV;

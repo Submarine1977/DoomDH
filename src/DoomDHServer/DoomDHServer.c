@@ -15,7 +15,7 @@
 
 #include "../Command.h"
 
-#define DEBUG            1
+#define DEBUG            0
 #define BUFFER_SIZE      65536
 #define MAX_NODE_COUNT   1024
 #define MAX_CLIENT_COUNT 128

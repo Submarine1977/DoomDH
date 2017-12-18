@@ -1,6 +1,5 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 2.8)
 ADD_SUBDIRECTORY(src/DoomDHServer bin/DoomDHServer)
 ADD_SUBDIRECTORY(src/DoomDHNode bin/DoomDHNode)
-ADD_SUBDIRECTORY(src/Test bin/Test)
 ADD_SUBDIRECTORY(src/DoomDHShell bin/DoomDHShell)
 ADD_SUBDIRECTORY(src/DoomDHImportDH bin/DoomDHImportDH)
