@@ -1,2 +1,2 @@
-ADD_EXECUTABLE(ddhnode DoomDHNode.c ../Sqlite/sqlite3.c)
-TARGET_LINK_LIBRARIES(ddhnode pthread ${CMAKE_DL_LIBS})
+ADD_EXECUTABLE(ddhnode DoomDHNode.c)
+TARGET_LINK_LIBRARIES(ddhnode pthread sqlite3 ${CMAKE_DL_LIBS})

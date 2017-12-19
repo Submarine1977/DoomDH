@@ -12,7 +12,7 @@
 #include <time.h>
 #include <sys/time.h>
 
-#include "../Sqlite/sqlite3.h"
+#include <sqlite3.h>
 #include "../Command.h"
 
 #define DEBUG            0

@@ -10,8 +10,8 @@
 #include<errno.h>
 #include<assert.h>
 #include<pthread.h>
+#include <sqlite3.h>
 
-#include "../Sqlite/sqlite3.h"
 #include "../Command.h"
 
 #define DEBUG            0
