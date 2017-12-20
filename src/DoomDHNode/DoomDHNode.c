@@ -386,8 +386,8 @@ int finalize_command(struct doom_dh_command_node *pcommand, int server)
     return 0;
 }
 
-//flag 0: normal csv
-//flag 1: Hex csv
+//flag 0: normal   csv
+//flag 1: extended csv
 void import_csv(char* buffer, int server, int flag)
 {
     int i, m, n, pos;
@@ -411,9 +411,20 @@ void import_csv(char* buffer, int server, int flag)
             {
                 if(flag == 1)
                 {
-                    decodehexstring(field[i]);
+                    if(field[i][0] == 'T')
+                    {
+                        sqlite3_bind_text(import_csv_statement, i + 1, field[i] + 1, -1, SQLITE_STATIC);
+                    }
+                    else
+                    {
+                        m = decodehexstring(field[i] + 1);
+                        sqlite3_bind_blob(import_csv_statement, i + 1, field[i] + 1, m, SQLITE_STATIC);
+                    }
                 }
-                sqlite3_bind_text(import_csv_statement, i + 1, field[i], -1, SQLITE_STATIC);
+                else
+                {
+                    sqlite3_bind_text(import_csv_statement, i + 1, field[i], -1, SQLITE_STATIC);
+                }
             }
             sqlite3_step(import_csv_statement);
             sqlite3_reset(import_csv_statement);

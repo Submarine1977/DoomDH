@@ -10,6 +10,7 @@
 #include<errno.h>
 #include<assert.h>
 #include<pthread.h>
+
 #include <sqlite3.h>
 
 #include "../Command.h"
@@ -42,6 +43,122 @@ int tiles[TILE_COUNT];
 int tilegeosize[TILE_COUNT];
 int tilenode[TILE_COUNT];
 int tilecount;
+
+int findmingeosizenode()
+{
+    int i, j, minsize;
+    for(i = 0; i < nodecount; i ++)
+    {
+        if(i == 0)
+        {
+            minsize = nodegeosize[i];
+            j = 0;
+        }
+        else if(minsize > nodegeosize[i])
+        {
+            minsize = nodegeosize[i];
+            j = i;
+        }
+    }
+    return j;
+}
+int findtile(int tileid)
+{//bi search
+    int i = 0, j = tilecount - 1;
+    int mid;
+    while(i <= j)
+    {
+        mid = (j - i) / 2 + i;
+        if(tileid < tiles[mid])
+        {
+            j = mid -1;
+        }
+        else if(tileid > tiles[mid])
+        {
+            i = mid + 1;
+        }
+        else
+        {
+            return mid;
+        }
+    }
+    return -1;
+}
+
+int inserttile(int tileid)
+{
+    int i = 0, j = tilecount - 1;
+    int mid;
+    while(i <= j)
+    {
+        mid = (j - i) / 2 + i;
+        if(tileid < tiles[mid])
+        {
+            j = mid - 1;
+            
+        }
+        else if(tileid > tiles[mid])
+        {
+            i = mid + 1;
+        }
+        else//tile already exist.
+        {
+            return mid;
+        }
+    }
+    if(i >= TILE_COUNT)
+    {
+         return -1;
+    }
+    
+    // i > j, insert tile at i;
+    //printf("#######################i = %d, tilecount = %d\n", i, tilecount);
+    if(i < tilecount)
+    {
+        memmove(tiles + i + 1, tiles + i, (tilecount - i) * 4);
+        memmove(tilegeosize + i + 1, tilegeosize + i, (tilecount - i) * 4);
+        //for(j = 0; j < tilecount + 1; j++)
+        //{
+        //    printf("%d:%d\n", tiles[j], tilegeosize[j]);
+        //}
+
+    }
+    tiles[i] = tileid;
+    tilegeosize[i] = 0;
+    tilecount++;
+    //printf("i = %d, tilecount = %d\n", i, tilecount);
+    //for(j = 0; j < tilecount; j++)
+    //{
+    //    printf("%d:%d\n", tiles[j], tilegeosize[j]);
+    //}
+    //printf("$$$$$$$$$$$$$$$$$$$$$$$$$$$$\n");
+    return i;
+}
+
+int gettile(double x, double y, int level)
+{
+    int p, tileid, nx, ny;
+	
+    nx = x / 90 * (1 << 30);
+    ny = y / 90 * (1 << 30);
+    tileid = nx < 0 ? 1:0;
+		
+    for (p = 30; p > (30-level); p-- )
+    {
+        tileid <<=1;
+        if ( ny & (1<<p) )
+        {
+            tileid |= 1;
+		    }
+        tileid <<=1;
+        if ( nx & (1<<p) )
+        {
+            tileid |=1;
+		    }
+    }
+    tileid += (1<<(16+level));
+    return tileid;
+}
 
 int send_info(int socket, char command, char action, char* fmt, ...)
 {
@@ -218,10 +335,11 @@ int get_node_info()
 
 int main(int argc, char *argv[])
 {
-    int i, j, rc;
-    sqlite3_stmt *statement;
-    unsigned char *geo;
+    int i, j, k, m, n, rc;
+    sqlite3_stmt*   statement;
+    const void*    blob;
     int tileid;
+    double x, y;
 
     if(argc != 5)
     {
@@ -285,37 +403,46 @@ int main(int argc, char *argv[])
     rc = sqlite3_open(argv[3], &db);
     if(rc != SQLITE_OK)
     {
-        printf("error:Failed to open database %s", sqlite3_errmsg(db));
+        printf("error:Failed to open database %s\n", sqlite3_errmsg(db));
         return -1;
     }
     rc = sqlite3_prepare (db, "SELECT GeomWGS84 from DH_CHA;", -1, &statement, NULL);
     if(rc != SQLITE_OK)
     {
-        printf("error:prepare error rc = %d!", rc);
-        return;
+        printf("error:prepare error rc = %d!\n", rc);
+        return -1 ;
     }
+    j = 0;
     while(sqlite3_step(statement) == SQLITE_ROW) 
     {
-        //geo    = sqlite3_column_blob(statement, 0);
-        //tileid = gettile(geo, 11);
-        //i = findtile(tileid);
-        //if(i == -1)
-        //{
-        //    i = inserttile(tileid);
-        //}
-        //tilegeosize[i] += sqlite3_column_bytes(statement, 0);
+        blob   = sqlite3_column_blob(statement, 0);
+        memcpy(&x, ((const char*)blob) + 47, sizeof(double));
+        memcpy(&y, ((const char*)blob) + 55, sizeof(double));
+        tileid = gettile(x/100000, y/100000, 11);
+        i = inserttile(tileid);
+        tilegeosize[i] += sqlite3_column_bytes(statement, 0);
+        j++;
     }
     sqlite3_finalize(statement);
     
-    //sorttilebygeosize();
+    for(i = 0; i < tilecount; i++)
+    {
+        printf("tile = %d, tilesize = %d\n", tiles[i], tilegeosize[i]);
+    }
     
     for(i = 0; i < tilecount; i++)
     {
-        //j = findmingeosizenode();
+        j = findmingeosizenode();
         nodegeosize[j] += tilegeosize[i];
         tilenode[i] = nodeids[j];
     }
+    
+    for(i = 0; i < nodecount; i++)
+    {
+        printf("nodeid = %d, nodesize = %d\n", nodeids[i], nodegeosize[i]);
+    }
 
+    return 1;
     //allocate memory for each node.
     //outbuf = (char **)(malloc(sizeof(char*)*nodecount));
     //for(i = 0; i < nodecount; i++)
@@ -323,22 +450,66 @@ int main(int argc, char *argv[])
     //    outbuf[i] = (char*)(malloc(sizeof(char) * BUFFER_SIZE));
     //}
 
-    rc = sqlite3_prepare (db, "SELECT GeomWGS84 from DH_CHA;", -1, &statement, NULL);
+    rc = sqlite3_prepare (db, "SELECT * from DH_CHA;", -1, &statement, NULL);
     if(rc != SQLITE_OK)
     {
         printf("error:prepare error rc = %d!", rc);
-        return;
+        return -1;
     }
+
+    send_info(ser, COMMAND_IMPORTCSX, COMMAND_ACTION_EXESTART, "%s", "DDH_CHA");
+
+    char str[16];
+    int  p;
+    n = sqlite3_column_count(statement);
     while(sqlite3_step(statement) == SQLITE_ROW) 
     {
-        //geo    = sqlite3_column_blob(statement, 100);
-        //tileid = gettile(geo, 11);
-        //i = findtile(tileid);
-        
-        //send the countent to tilenode[i]
-        
+
+        //send to tilenode[i]
+        memset(outbuf, 0, sizeof(outbuf));
+        outbuf[0] = COMMAND_IMPORTCSX;
+        outbuf[1] = COMMAND_ACTION_EXEINPUT_ONE;
+        p = 6;
+        for(j = 0; j < n; j++)
+        {
+            if(sqlite3_column_type(statement, j) != SQLITE_BLOB)
+            {
+                outbuf[p] = 'T';
+                p++;
+                strcpy(outbuf + p, sqlite3_column_text(statement, j));
+                p += strlen((const char*)sqlite3_column_text(statement, j));
+            }
+            else
+            {
+                outbuf[p] = 'B';
+                p++;
+                m = sqlite3_column_bytes(statement, j);
+                blob   = sqlite3_column_blob(statement, j);
+                memcpy(&x, ((const char*)blob) + 47, sizeof(double));
+                memcpy(&y, ((const char*)blob) + 55, sizeof(double));
+                tileid = gettile(x/100000, y/100000, 11);
+                i = findtile(tileid);
+                *(short*)(outbuf + 4) = tilenode[i];
+                
+                for(k = 0; k < m; k++)
+                {
+                    sprintf(str, "%02x", ((const unsigned char*)blob)[k]);
+                    strcpy(outbuf + p, str + strlen(str) - 2);
+                    p += 2;
+                }
+            }
+            if(j < n - 1)
+            {
+                outbuf[p] = '\001';
+                p++;
+            }
+        }
+        *(short*)(outbuf + 2) = p;
+        send(ser,outbuf, p, 0);
     }
     sqlite3_finalize(statement);
+
+    send_info(ser, COMMAND_IMPORTCSX, COMMAND_ACTION_EXESTART, NULL);
 
     
     //free memory
