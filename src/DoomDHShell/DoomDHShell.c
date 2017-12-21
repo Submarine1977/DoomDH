@@ -490,6 +490,7 @@ int handle_sql(char * buffer)
         command = COMMAND_EXECUTEDDL;
     }
     else if(strncasecmp(buffer, "INSERT", strlen("INSERT")) == 0 ||
+    	       strncasecmp(buffer, "DELETE", strlen("INSERT")) == 0 ||
     	       strncasecmp(buffer, "UPDATE", strlen("UPDATE")) == 0)
     {
         command = COMMAND_EXECUTEDML;

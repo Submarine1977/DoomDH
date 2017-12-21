@@ -412,7 +412,6 @@ int main(int argc, char *argv[])
         printf("error:prepare error rc = %d!\n", rc);
         return -1 ;
     }
-    j = 0;
     while(sqlite3_step(statement) == SQLITE_ROW) 
     {
         blob   = sqlite3_column_blob(statement, 0);
@@ -421,7 +420,6 @@ int main(int argc, char *argv[])
         tileid = gettile(x/100000, y/100000, 11);
         i = inserttile(tileid);
         tilegeosize[i] += sqlite3_column_bytes(statement, 0);
-        j++;
     }
     sqlite3_finalize(statement);
     
@@ -442,7 +440,6 @@ int main(int argc, char *argv[])
         printf("nodeid = %d, nodesize = %d\n", nodeids[i], nodegeosize[i]);
     }
 
-    return 1;
     //allocate memory for each node.
     //outbuf = (char **)(malloc(sizeof(char*)*nodecount));
     //for(i = 0; i < nodecount; i++)
@@ -457,11 +454,16 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    pthread_mutex_lock(&mutex);
+    command_status++;
+    pthread_mutex_unlock(&mutex);
+
     send_info(ser, COMMAND_IMPORTCSX, COMMAND_ACTION_EXESTART, "%s", "DDH_CHA");
 
     char str[16];
     int  p;
     n = sqlite3_column_count(statement);
+    //int q = 0;
     while(sqlite3_step(statement) == SQLITE_ROW) 
     {
 
@@ -472,7 +474,8 @@ int main(int argc, char *argv[])
         p = 6;
         for(j = 0; j < n; j++)
         {
-            if(sqlite3_column_type(statement, j) != SQLITE_BLOB)
+            if(sqlite3_column_type(statement, j) != SQLITE_BLOB && 
+            	 sqlite3_column_type(statement, j) != SQLITE_TEXT)
             {
                 outbuf[p] = 'T';
                 p++;
@@ -501,16 +504,26 @@ int main(int argc, char *argv[])
             if(j < n - 1)
             {
                 outbuf[p] = '\001';
-                p++;
             }
+            else
+            {
+                outbuf[p] = '\0';
+            }
+            p++;
         }
         *(short*)(outbuf + 2) = p;
         send(ser,outbuf, p, 0);
+        //q++;
+        //if(q > 10000)
+        //    break;
     }
     sqlite3_finalize(statement);
+    send_info(ser, COMMAND_IMPORTCSX, COMMAND_ACTION_EXESTOP, NULL);
 
-    send_info(ser, COMMAND_IMPORTCSX, COMMAND_ACTION_EXESTART, NULL);
-
+    while(command_status > 0)
+    {
+        sleep(1);
+    }
     
     //free memory
     //for(i = 0; i < nodecount; i++)

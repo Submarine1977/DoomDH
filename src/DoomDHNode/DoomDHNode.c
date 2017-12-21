@@ -393,9 +393,18 @@ void import_csv(char* buffer, int server, int flag)
     int i, m, n, pos;
     char *errmsg;
     char *field[512];
+    char seperator;
     n = import_csv_fieldcount;
     pos = 0;
-    while( (m = split_string(buffer, ',', field, &pos)) > 0)
+    if(flag == '0')
+    {
+        seperator = ',';
+    }
+    else
+    {
+        seperator = '\001';
+    }
+    while( (m = split_string(buffer,seperator, field, &pos)) > 0)
     {
         if(m != n)
         {
@@ -504,7 +513,7 @@ struct doom_dh_database* set_database(char* buffer, int server)
 
 void create_ddhtables(sqlite3 *db, int server)
 {
-    char buf[512], sqlfile[512], sql[8192],*errmsg;
+    char buf[512], sqlfile[512], sql[8192],*errmsg, *p;
     char tables[][8] = {"DDH_CHA"};
     int  i, rc, count; 
     FILE *f;
@@ -515,11 +524,17 @@ void create_ddhtables(sqlite3 *db, int server)
         log_info("error: create_ddhtables, failed to get exe path.\n");
         return;
     }
-    strcat(buf, "/DDHModel/");
+    
+    p = buf + strlen(buf) - 1;
+    while(*p != '/' && p != buf)
+    {
+        *p = '\0';
+        p--;
+    }
     
     for(i = 0; i < sizeof(tables) /sizeof(char[8]); i++)
     {
-        sprintf(sqlfile,"%s%s", buf, tables[i]);
+        sprintf(sqlfile,"%s/DDHModel/%s.sql", buf, tables[i]);
         f = fopen(sqlfile, "r");
         if(f)
         {
@@ -556,6 +571,18 @@ struct doom_dh_database* create_database(char* buffer, int server)
         i++;
     }
     name[i] = '\0';
+
+    for(i = 0; i < MAX_DB_COUNT; i++)
+    {
+        if(databases[i].db != NULL)
+        {
+            if(strcasecmp(databases[i].name, name) == 0)
+            {
+                send_info(server, COMMAND_CREATEDATABASE, COMMAND_ACTION_RETOUT_CLIENT, "error:Database %s already existed.", name);
+                return NULL;
+            }
+        }
+    }
     
     for(i = 0; i < MAX_DB_COUNT; i++)
     {
@@ -568,10 +595,10 @@ struct doom_dh_database* create_database(char* buffer, int server)
     if(i < MAX_DB_COUNT)
     {
         strcpy(databases[i].name, name);
-        //char dbname[128];
-        //sprintf(dbname, "/data/users/guozhaozhong/DoomDH/%d_%s.sq3", nodeid, name);
-        //rc = sqlite3_open(dbname, &databases[i].db);
-        rc = sqlite3_open(":memory:", &databases[i].db);
+        char dbname[128];
+        sprintf(dbname, "/home/guozhaozhong/DoomDH/build/%d_%s.sq3", nodeid, name);
+        rc = sqlite3_open(dbname, &databases[i].db);
+        //rc = sqlite3_open(":memory:", &databases[i].db);
         if(rc == SQLITE_OK)
         {
             send_info( server, COMMAND_CREATEDATABASE, COMMAND_ACTION_RETOUT_CLIENT, "Database %s was created!", name);
@@ -930,11 +957,23 @@ void handle_server_request(int index)
             i += *(short*)(start+2);
         }
     }
+    
+    if(DEBUG)
+    {
+        log_info("bufferlength = %d, i = %d\n", pservers[index]->bufferlength, i);
+    }
+    
     if(i < pservers[index]->bufferlength)
     {
         memmove(pservers[index]->buffer, pservers[index]->buffer + i, pservers[index]->bufferlength - i);
     }
     pservers[index]->bufferlength -= i;
+
+    if(DEBUG)
+    {
+        log_info("buffer after moving\n");
+        dumpbuffer(pservers[index]->buffer, pservers[index]->bufferlength);
+    }
 
 };
 
