@@ -21,7 +21,8 @@
 char      inbuf[BUFFER_SIZE];
 int       inbuflength;
 char      outbuf[BUFFER_SIZE];
-//char      **outbuf;  
+char      **outbufs;
+int       *outbufslength;
 
 char ip[16];
 int  port;
@@ -432,7 +433,7 @@ int main(int argc, char *argv[])
     {
         j = findmingeosizenode();
         nodegeosize[j] += tilegeosize[i];
-        tilenode[i] = nodeids[j];
+        tilenode[i] = j;
     }
     
     for(i = 0; i < nodecount; i++)
@@ -441,13 +442,18 @@ int main(int argc, char *argv[])
     }
 
     //allocate memory for each node.
-    //outbuf = (char **)(malloc(sizeof(char*)*nodecount));
-    //for(i = 0; i < nodecount; i++)
-    //{
-    //    outbuf[i] = (char*)(malloc(sizeof(char) * BUFFER_SIZE));
-    //}
+    outbufs = (char **)(malloc(sizeof(char*)*nodecount));
+    outbufslength= (int*)(malloc(sizeof(int)*nodecount));
+    for(i = 0; i < nodecount; i++)
+    {
+        outbufs[i] = (char*)(malloc(sizeof(char) * BUFFER_SIZE));
+        outbufs[i][0] = COMMAND_IMPORTDDR;
+        outbufs[i][1] = COMMAND_ACTION_EXEINPUT_ONE;
+        *(short*)(outbufs[i] + 4) = nodeids[tilenode[i]];
+        outbufslength[i] = 6;
+    }
 
-    rc = sqlite3_prepare (db, "SELECT * from DH_CHA;", -1, &statement, NULL);
+    rc = sqlite3_prepare (db, "SELECT Id, GeomWGS84 from DH_CHA;", -1, &statement, NULL);
     if(rc != SQLITE_OK)
     {
         printf("error:prepare error rc = %d!", rc);
@@ -458,79 +464,92 @@ int main(int argc, char *argv[])
     command_status++;
     pthread_mutex_unlock(&mutex);
 
-    send_info(ser, COMMAND_IMPORTCSX, COMMAND_ACTION_EXESTART, "%s", "DDH_CHA");
+    send_info(ser, COMMAND_IMPORTDDR, COMMAND_ACTION_EXESTART, "%s", "DDH_CHA");
 
     char str[16];
     int  p;
     n = sqlite3_column_count(statement);
+    int fieldtypes[512];
+    
     //int q = 0;
     while(sqlite3_step(statement) == SQLITE_ROW) 
     {
+        p = 0;
 
-        //send to tilenode[i]
-        memset(outbuf, 0, sizeof(outbuf));
-        outbuf[0] = COMMAND_IMPORTCSX;
-        outbuf[1] = COMMAND_ACTION_EXEINPUT_ONE;
-        p = 6;
-        for(j = 0; j < n; j++)
+        //Id
+        outbuf[p] = SQLITE_INTEGER;
+        p++;
+        *((int*)(outbuf + p)) = sqlite3_column_int(statement, 0);
+        p += 4;
+
+        //GeomWGS84
+        outbuf[p] = SQLITE_BLOB;
+        p++;
+        m = sqlite3_column_bytes(statement, 1);
+        *((int*)(outbuf + p)) = m;
+        p += 4;
+        blob   = sqlite3_column_blob(statement, 1);
+        memcpy(outbuf + p, blob, m);
+        p += m;
+        memcpy(&x, ((const char*)blob) + 47, sizeof(double));
+        memcpy(&y, ((const char*)blob) + 55, sizeof(double));
+        tileid = gettile(x/100000, y/100000, 11);
+        i = findtile(tileid);
+        i = tilenode[i];
+
+        //Core Attribute
+        outbuf[p] = SQLITE_NULL;
+        p++;
+
+        //Fixed Attribute
+        outbuf[p] = SQLITE_NULL;
+        p++;
+
+        //Flexible Attribute
+        outbuf[p] = SQLITE_NULL;
+        p++;
+
+        //End of the record
+        outbuf[p] = 0xff;
+        p++;
+        
+        if(p + outbufslength[i] < BUFFER_SIZE)
         {
-            if(sqlite3_column_type(statement, j) != SQLITE_BLOB && 
-            	 sqlite3_column_type(statement, j) != SQLITE_TEXT)
-            {
-                outbuf[p] = 'T';
-                p++;
-                strcpy(outbuf + p, sqlite3_column_text(statement, j));
-                p += strlen((const char*)sqlite3_column_text(statement, j));
-            }
-            else
-            {
-                outbuf[p] = 'B';
-                p++;
-                m = sqlite3_column_bytes(statement, j);
-                blob   = sqlite3_column_blob(statement, j);
-                memcpy(&x, ((const char*)blob) + 47, sizeof(double));
-                memcpy(&y, ((const char*)blob) + 55, sizeof(double));
-                tileid = gettile(x/100000, y/100000, 11);
-                i = findtile(tileid);
-                *(short*)(outbuf + 4) = tilenode[i];
-                
-                for(k = 0; k < m; k++)
-                {
-                    sprintf(str, "%02x", ((const unsigned char*)blob)[k]);
-                    strcpy(outbuf + p, str + strlen(str) - 2);
-                    p += 2;
-                }
-            }
-            if(j < n - 1)
-            {
-                outbuf[p] = '\001';
-            }
-            else
-            {
-                outbuf[p] = '\0';
-            }
-            p++;
+            memcpy(outbufs[i] + outbufslength[i], outbuf, p);
+            outbufslength[i] += p;
         }
-        *(short*)(outbuf + 2) = p;
-        send(ser,outbuf, p, 0);
+        else
+        {
+            *(short*)(outbufs[i] + 2) = outbufslength[i];
+            send(ser,outbufs[i], outbufslength[i], 0);
+            outbufslength[i] = 6;
+
+            memcpy(outbufs[i] + outbufslength[i], outbuf, p);
+            outbufslength[i] += p;
+        }
         //q++;
         //if(q > 10000)
         //    break;
     }
+
+    //send the remaining content and free memory
+    for(i = 0; i < nodecount; i++)
+    {
+        if(outbufslength[i] > 6)
+        {
+            *(short*)(outbufs[i] + 2) = outbufslength[i];
+            send(ser,outbufs[i], outbufslength[i], 0);
+        }
+        free(outbufs[i]);
+    }
+    free(outbufs);
+
     sqlite3_finalize(statement);
-    send_info(ser, COMMAND_IMPORTCSX, COMMAND_ACTION_EXESTOP, NULL);
+    send_info(ser, COMMAND_IMPORTDDR, COMMAND_ACTION_EXESTOP, NULL);
 
     while(command_status > 0)
     {
         sleep(1);
     }
-    
-    //free memory
-    //for(i = 0; i < nodecount; i++)
-    //{
-    //    free(outbuf[i]);
-    //}
-    //free(outbuf);
-    
     return  0;
 }

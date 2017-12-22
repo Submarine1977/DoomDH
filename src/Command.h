@@ -9,7 +9,7 @@
 #define COMMAND_EXECUTEDML     8
 #define COMMAND_EXECUTEDQL     9
 #define COMMAND_IMPORTCSV      10
-#define COMMAND_IMPORTCSX      11
+#define COMMAND_IMPORTDDR      11    //DoomDhRecord
 
 #define COMMAND_ACTION_EXESTART         1
 #define COMMAND_ACTION_EXEINPUT_ONE     2

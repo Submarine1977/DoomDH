@@ -147,9 +147,9 @@ struct doom_dh_database  databases[MAX_DB_COUNT];
 
 struct doom_dh_database  *pcurrentdb = NULL;
 
-sqlite3_stmt *import_csv_statement;
-int          import_csv_fieldcount;
-int          import_csv_count;
+sqlite3_stmt* import_statement;
+int           import_fieldcount;
+int           import_count;
 
 int split_string(char* buffer, char sperator, char** field, int *pos)
 {
@@ -198,7 +198,71 @@ int split_string(char* buffer, char sperator, char** field, int *pos)
     
     return m;
 }
+int split_ddr(char* buffer, int length, char** field, char* fieldtype, int* fieldlength, int *pos)
+{
+    int m = 0;
+    int i = *pos;
+    
+    //log_info("split_ddr pos = %d, length = %d, buffer = \n", *pos, length);
+    //dumpbuffer(buffer, length);
+    
+    //skip /r /n;
+    while(buffer[i] != ((char)0xff)) //end of doom dh record
+    {
+        if(i + 1 >= length)
+        {
+            return -1;
+        }
+        fieldtype[m] = buffer[i];
+        i++;
+        if(fieldtype[m] == SQLITE_TEXT || fieldtype[m] == SQLITE_BLOB)
+        {
+            if(i + 4 >= length)
+            {
+                return -1;
+            }
+            fieldlength[m] = *((int*)(buffer + i));
+            i += 4;
+            if(i + fieldlength[m] >= length)
+            {
+                return -1;
+            }
+            field[m]     = buffer + i;
+            i += fieldlength[m];
+        }
+        else if(fieldtype[m] == SQLITE_INTEGER)
+        {
+            if(i + 4 >= length)
+            {
+                return -1;
+            }
+            field[m]       = buffer + i;
+            fieldlength[m] = 4;
+            i += fieldlength[m];
+        }
+        else if(fieldtype[m] == SQLITE_FLOAT)
+        {
+            if(i + 8 >= length)
+            {
+                return -1;
+            }
+            field[m]       = buffer + i;
+            fieldlength[m] = 8;
+            i += fieldlength[m];
+        }
+        else
+        {
+            //assert(fieldtype[m] == SQLITE_NULL);
+            fieldlength[m] = 0;
+        }
+        m++;
+        //log_info("split_ddr i = %d, m = %d\n", i, m);
+    }
+    *pos = i + 1;
+    return m;
+}
 
+/*
 int decodehexchar(char c)
 {
     if(c >= '0' && c <= '9')
@@ -228,7 +292,7 @@ int decodehexstring(char * buffer)
     buffer[i] = '\0';
     return i;
 }
-
+*/
 void add_siblingcommand(struct doom_dh_node* pnode, struct doom_dh_command_node *pcommand)
 {
     if(pnode->firstcommand == NULL)
@@ -326,25 +390,25 @@ int init_command(struct doom_dh_command_node *pcommand, char* param, int server)
     char sql[512], str[8], *table;
     table = param;
     if( pcommand->command.id == COMMAND_IMPORTCSV ||
-    	  pcommand->command.id == COMMAND_IMPORTCSX)
+    	  pcommand->command.id == COMMAND_IMPORTDDR)
     {
-        import_csv_count = 0;        
+        import_count = 0;        
         if(execute_dml("BEGIN;", server)  == 0)
         {
             return 0;
         }
         
         sprintf(sql, "select * from %s;", table);
-        rc = sqlite3_prepare (pcurrentdb->db, sql, -1, &import_csv_statement, NULL);
+        rc = sqlite3_prepare (pcurrentdb->db, sql, -1, &import_statement, NULL);
         if(rc != SQLITE_OK)
         {
             send_info( server, pcommand->command.id, COMMAND_ACTION_RETOUT_CLIENT, "error:prepare error rc = %d!, sql = %s", rc, sql);
             execute_dml("ROLLBACK;", server);
             return 0;
         }
-        n = sqlite3_column_count(import_csv_statement);
-        sqlite3_finalize(import_csv_statement);
-        import_csv_fieldcount = n;
+        n = sqlite3_column_count(import_statement);
+        sqlite3_finalize(import_statement);
+        import_fieldcount = n;
         
         //insert into [table] values (?1,?2,?3,..?n);
         sprintf(sql, "insert into %s values (", table);
@@ -360,7 +424,7 @@ int init_command(struct doom_dh_command_node *pcommand, char* param, int server)
             }
             strcat(sql, str);
         }
-        rc = sqlite3_prepare (pcurrentdb->db, sql, -1, &import_csv_statement, NULL);
+        rc = sqlite3_prepare (pcurrentdb->db, sql, -1, &import_statement, NULL);
         if(rc != SQLITE_OK)
         {
             send_info( server, pcommand->command.id, COMMAND_ACTION_RETOUT_CLIENT, "error:prepare error rc = %d!, sql = %s", rc, sql);
@@ -374,41 +438,33 @@ int init_command(struct doom_dh_command_node *pcommand, char* param, int server)
 int finalize_command(struct doom_dh_command_node *pcommand, int server)
 {
     if(pcommand->command.id == COMMAND_IMPORTCSV ||
-    	 pcommand->command.id == COMMAND_IMPORTCSX)
+    	 pcommand->command.id == COMMAND_IMPORTDDR)
     {
         if(execute_dml("COMMIT;", server)  == 0)
         {
             return 1;
         }
-        sqlite3_finalize(import_csv_statement);
-        import_csv_statement = NULL;
+        sqlite3_finalize(import_statement);
+        import_statement = NULL;
     }
     return 0;
 }
 
-//flag 0: normal   csv
-//flag 1: extended csv
-void import_csv(char* buffer, int server, int flag)
+void import_csv(char* buffer, int server)
 {
     int i, m, n, pos;
     char *errmsg;
     char *field[512];
     char seperator;
-    n = import_csv_fieldcount;
+    
+    n = import_fieldcount;
     pos = 0;
-    if(flag == '0')
-    {
-        seperator = ',';
-    }
-    else
-    {
-        seperator = '\001';
-    }
+    seperator = ',';
     while( (m = split_string(buffer,seperator, field, &pos)) > 0)
     {
         if(m != n)
         {
-            log_info("error: the table has %d field,the line %d of csv has %d field, pos = %d\n", n, import_csv_count, m, pos);
+            log_info("error: the table has %d field,the line %d of csv has %d field, pos = %d\n", n, import_count, m, pos);
             for(i = 0; i < m; i++)
             {
                 log_info("field[%d] = %s\n", i, field[i]);
@@ -418,34 +474,86 @@ void import_csv(char* buffer, int server, int flag)
         {
             for(i = 0; i < n; i++)
             {
-                if(flag == 1)
-                {
-                    if(field[i][0] == 'T')
-                    {
-                        sqlite3_bind_text(import_csv_statement, i + 1, field[i] + 1, -1, SQLITE_STATIC);
-                    }
-                    else
-                    {
-                        m = decodehexstring(field[i] + 1);
-                        sqlite3_bind_blob(import_csv_statement, i + 1, field[i] + 1, m, SQLITE_STATIC);
-                    }
-                }
-                else
-                {
-                    sqlite3_bind_text(import_csv_statement, i + 1, field[i], -1, SQLITE_STATIC);
-                }
+                sqlite3_bind_text(import_statement, i + 1, field[i], -1, SQLITE_STATIC);
             }
-            sqlite3_step(import_csv_statement);
-            sqlite3_reset(import_csv_statement);
+            sqlite3_step(import_statement);
+            sqlite3_reset(import_statement);
         }
-        import_csv_count++;
-        if(import_csv_count % 1000 == 0)
+        import_count++;
+        if(import_count % 1000 == 0)
         {
             execute_dml("COMMIT;", server);
             execute_dml("BEGIN;", server);
         }
     }
 }
+
+void import_ddr(char* buffer, int length, int server)
+{
+    int i, m, n, pos;
+    char *errmsg;
+    char *field[512];
+    char  fieldtype[512];
+    int   fieldlength[512];
+    
+    n = import_fieldcount;
+
+    pos = 0;
+    while(pos < length)
+    {
+        //log_info("split_ddr: length = %d, pos = %d\n", length, pos);
+        m = split_ddr(buffer, length, field, fieldtype, fieldlength, &pos);
+        if(m < 0 ) //split failed
+        {
+            log_info("split_ddr failed\n");
+            break;
+        }
+        if(m != n)
+        {
+            log_info("error: the table has %d field,the line %d of csv has %d field, pos = %d\n", n, import_count, m, pos);
+            //for(i = 0; i < m; i++)
+            //{
+            //    log_info("field[%d] = %s\n", i, field[i]);
+            //}
+        }
+        else
+        {
+            for(i = 0; i < n; i++)
+            {
+                if(fieldtype[i] == SQLITE_INTEGER)
+                {
+                    sqlite3_bind_int(import_statement, i + 1, *((int*)field[i]));
+                }
+                else if(fieldtype[i] == SQLITE_FLOAT)
+                {
+                    sqlite3_bind_double(import_statement, i + 1, *((double*)field[i]));
+                }
+                else if(fieldtype[i] == SQLITE_TEXT)
+                {
+                    sqlite3_bind_text(import_statement, i + 1, field[i], fieldlength[i], SQLITE_STATIC);
+                }
+                else if(fieldtype[i] == SQLITE_BLOB)
+                {
+                    sqlite3_bind_blob(import_statement, i + 1, field[i], fieldlength[i], SQLITE_STATIC);
+                }
+                else
+                {
+                    assert(fieldtype[i] == SQLITE_NULL);
+                    sqlite3_bind_null(import_statement, i + 1);
+                }
+            }
+            sqlite3_step(import_statement);
+            sqlite3_reset(import_statement);
+        }
+        import_count++;
+        if(import_count % 1000 == 0)
+        {
+            execute_dml("COMMIT;", server);
+            execute_dml("BEGIN;", server);
+        }
+    }
+}
+
 
 void execute_dql(char* buffer, int server)
 {
@@ -595,10 +703,10 @@ struct doom_dh_database* create_database(char* buffer, int server)
     if(i < MAX_DB_COUNT)
     {
         strcpy(databases[i].name, name);
-        char dbname[128];
-        sprintf(dbname, "/home/guozhaozhong/DoomDH/build/%d_%s.sq3", nodeid, name);
-        rc = sqlite3_open(dbname, &databases[i].db);
-        //rc = sqlite3_open(":memory:", &databases[i].db);
+        //char dbname[128];
+        //sprintf(dbname, "/home/guozhaozhong/DoomDH/build/%d_%s.sq3", nodeid, name);
+        //rc = sqlite3_open(dbname, &databases[i].db);
+        rc = sqlite3_open(":memory:", &databases[i].db);
         if(rc == SQLITE_OK)
         {
             send_info( server, COMMAND_CREATEDATABASE, COMMAND_ACTION_RETOUT_CLIENT, "Database %s was created!", name);
@@ -829,7 +937,7 @@ void handle_server_request(int index)
                 	  pcommand->command.id == COMMAND_EXECUTEDML      ||
                 	  pcommand->command.id == COMMAND_EXECUTEDQL      ||
                 	  pcommand->command.id == COMMAND_IMPORTCSV       ||
-                	  pcommand->command.id == COMMAND_IMPORTCSX
+                	  pcommand->command.id == COMMAND_IMPORTDDR
                 	  )
                 {
                     pcommand->command.waitinginput = 1;
@@ -896,11 +1004,11 @@ void handle_server_request(int index)
                 }
                 else if(pservers[index]->lastcommand->command.id == COMMAND_IMPORTCSV)	//import csv into [table]
                 {
-                    import_csv(start + offset, pservers[index]->socket, 0);
+                    import_csv(start + offset, pservers[index]->socket);
                 }
-                else if(pservers[index]->lastcommand->command.id == COMMAND_IMPORTCSX)
+                else if(pservers[index]->lastcommand->command.id == COMMAND_IMPORTDDR)
                 {
-                    import_csv(start + offset, pservers[index]->socket, 1);
+                    import_ddr(start + offset, *(short*)(start+2) - offset, pservers[index]->socket);
                 }
                 else
                 {
