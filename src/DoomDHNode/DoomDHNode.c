@@ -622,7 +622,7 @@ struct doom_dh_database* set_database(char* buffer, int server)
 void create_ddhtables(sqlite3 *db, int server)
 {
     char buf[512], sqlfile[512], sql[8192],*errmsg, *p;
-    char tables[][8] = {"DDH_CHA"};
+    char tables[][8] = {"DDH_CHA","DDH_NOD"};
     int  i, rc, count; 
     FILE *f;
     

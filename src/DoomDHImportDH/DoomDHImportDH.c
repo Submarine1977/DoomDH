@@ -336,7 +336,7 @@ int get_node_info()
 
 int main(int argc, char *argv[])
 {
-    int i, j, k, m, n, rc;
+    int i, j, m, n, p, rc;
     sqlite3_stmt*   statement;
     const void*    blob;
     int tileid;
@@ -465,13 +465,8 @@ int main(int argc, char *argv[])
     pthread_mutex_unlock(&mutex);
 
     send_info(ser, COMMAND_IMPORTDDR, COMMAND_ACTION_EXESTART, "%s", "DDH_CHA");
-
-    char str[16];
-    int  p;
     n = sqlite3_column_count(statement);
-    int fieldtypes[512];
     
-    //int q = 0;
     while(sqlite3_step(statement) == SQLITE_ROW) 
     {
         p = 0;
@@ -527,9 +522,6 @@ int main(int argc, char *argv[])
             memcpy(outbufs[i] + outbufslength[i], outbuf, p);
             outbufslength[i] += p;
         }
-        //q++;
-        //if(q > 10000)
-        //    break;
     }
 
     //send the remaining content and free memory
@@ -540,12 +532,113 @@ int main(int argc, char *argv[])
             *(short*)(outbufs[i] + 2) = outbufslength[i];
             send(ser,outbufs[i], outbufslength[i], 0);
         }
+    }
+    sqlite3_finalize(statement);
+    send_info(ser, COMMAND_IMPORTDDR, COMMAND_ACTION_EXESTOP, NULL);
+    
+    rc = sqlite3_prepare (db, "SELECT Id, GeomWGS84 from DH_NOD;", -1, &statement, NULL);
+    if(rc != SQLITE_OK)
+    {
+        printf("error:prepare error rc = %d!", rc);
+        return -1;
+    }
+
+    pthread_mutex_lock(&mutex);
+    command_status++;
+    pthread_mutex_unlock(&mutex);
+
+    send_info(ser, COMMAND_IMPORTDDR, COMMAND_ACTION_EXESTART, "%s", "DDH_NOD");
+    n = sqlite3_column_count(statement);
+    
+    while(sqlite3_step(statement) == SQLITE_ROW) 
+    {
+        p = 0;
+
+        //Id
+        outbuf[p] = SQLITE_INTEGER;
+        p++;
+        *((int*)(outbuf + p)) = sqlite3_column_int(statement, 0);
+        p += 4;
+
+        //GeomWGS84
+        outbuf[p] = SQLITE_BLOB;
+        p++;
+        m = sqlite3_column_bytes(statement, 1);
+        *((int*)(outbuf + p)) = m;
+        p += 4;
+        blob   = sqlite3_column_blob(statement, 1);
+        memcpy(outbuf + p, blob, m);
+        p += m;
+        memcpy(&x, ((const char*)blob) + 43, sizeof(double));
+        memcpy(&y, ((const char*)blob) + 51, sizeof(double));
+        tileid = gettile(x/100000, y/100000, 11);
+        i = findtile(tileid);
+        i = tilenode[i];
+
+        //Core Attribute
+        outbuf[p] = SQLITE_NULL;
+        p++;
+
+        //Fixed Attribute
+        outbuf[p] = SQLITE_NULL;
+        p++;
+
+        //Flexible Attribute
+        outbuf[p] = SQLITE_NULL;
+        p++;
+
+        //End of the record
+        outbuf[p] = 0xff;
+        p++;
+        
+        if(p + outbufslength[i] < BUFFER_SIZE)
+        {
+            memcpy(outbufs[i] + outbufslength[i], outbuf, p);
+            outbufslength[i] += p;
+        }
+        else
+        {
+            *(short*)(outbufs[i] + 2) = outbufslength[i];
+            send(ser,outbufs[i], outbufslength[i], 0);
+            outbufslength[i] = 6;
+
+            memcpy(outbufs[i] + outbufslength[i], outbuf, p);
+            outbufslength[i] += p;
+        }
+    }
+
+    //send the remaining content and free memory
+    for(i = 0; i < nodecount; i++)
+    {
+        if(outbufslength[i] > 6)
+        {
+            *(short*)(outbufs[i] + 2) = outbufslength[i];
+            send(ser,outbufs[i], outbufslength[i], 0);
+        }
+    }
+    sqlite3_finalize(statement);
+    send_info(ser, COMMAND_IMPORTDDR, COMMAND_ACTION_EXESTOP, NULL);
+    
+    for(i = 0; i < nodecount; i++)
+    {
         free(outbufs[i]);
     }
     free(outbufs);
+    free(outbufslength);
 
-    sqlite3_finalize(statement);
-    send_info(ser, COMMAND_IMPORTDDR, COMMAND_ACTION_EXESTOP, NULL);
+    while(command_status > 0)
+    {
+        sleep(1);
+    }
+
+
+    pthread_mutex_lock(&mutex);
+    command_status++;
+    pthread_mutex_unlock(&mutex);
+    send_info(ser, COMMAND_EXECUTEDQL, COMMAND_ACTION_EXESTART, NULL);
+    send_info(ser, COMMAND_EXECUTEDQL, COMMAND_ACTION_EXEINPUT, "%s", "select count() from DDH_CHA;");
+    send_info(ser, COMMAND_EXECUTEDQL, COMMAND_ACTION_EXEINPUT, "%s", "select count() from DDH_NOD;");
+    send_info(ser, COMMAND_EXECUTEDQL, COMMAND_ACTION_EXESTOP,  NULL);
 
     while(command_status > 0)
     {
